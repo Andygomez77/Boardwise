@@ -13,9 +13,13 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            asset: mac.zip
+            files: |
+              mac.zip
+              Boardwise.dmg
           - os: windows-latest
-            asset: windows.zip
+            files: |
+              windows.zip
+              Boardwise-Setup.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -27,13 +31,21 @@ jobs:
         shell: bash
       - run: pyinstaller --noconfirm --windowed --name Boardwise --paths . --add-data "VERSION:." --add-data "models:models" boardwise/__main__.py
       - if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent dist/Boardwise.app ${{ matrix.asset }}
+        run: |
+          ditto -c -k --keepParent dist/Boardwise.app mac.zip
+          mkdir dmg
+          cp -R dist/Boardwise.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Boardwise" -srcfolder dmg -format UDZO Boardwise.dmg
       - if: runner.os == 'Windows'
-        run: Compress-Archive dist/Boardwise ${{ matrix.asset }}
+        run: |
+          Compress-Archive dist/Boardwise windows.zip
+          if (-not (Get-Command ISCC -ErrorAction SilentlyContinue)) { choco install innosetup -y; $env:PATH += ";${env:ProgramFiles(x86)}\Inno Setup 6" }
+          ISCC /DAppVersion=${{ github.run_number }} installer\windows.iss
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          name: ${{ runner.os }}
+          path: ${{ matrix.files }}
 
   release:
     needs: build
@@ -42,7 +54,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - run: gh release create "v${{ github.run_number }}" mac.zip windows.zip --repo "${{ github.repository }}" --title "v${{ github.run_number }}" --notes "$NOTES"
+      - run: gh release create "v${{ github.run_number }}" mac.zip windows.zip Boardwise-Setup.exe Boardwise.dmg --repo "${{ github.repository }}" --title "v${{ github.run_number }}" --notes "$NOTES"
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ github.event.head_commit.message }}
