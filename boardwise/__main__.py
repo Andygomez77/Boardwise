@@ -10,8 +10,8 @@ from boardwise.ui.main_window import TITLE, MainWindow
 
 def update_if_available(app) -> bool:
     """True si quedó lanzada una actualización y la app debe cerrarse."""
-    if not getattr(sys, "frozen", False):
-        return False  # corriendo desde el código: no hay nada que actualizar
+    if not getattr(sys, "frozen", False) or updater.current_version() == 0:
+        return False  # sin build que actualizar: código local o compilación local sin VERSION (no viene de un release)
     token = updater.load_token()
     if not token:
         token, ok = QInputDialog.getText(None, TITLE, "Token de GitHub (solo lectura) para recibir actualizaciones:",
