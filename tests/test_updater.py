@@ -1,9 +1,9 @@
-"""python test_updater.py — chequea la comparación de versiones sin tocar la red."""
+"""python -m tests.test_updater — chequea la comparación de versiones sin tocar la red."""
 import io
 import json
 from unittest import mock
 
-import updater
+from monterrey_count import updater
 
 
 def release(tag, asset=updater.ASSET):

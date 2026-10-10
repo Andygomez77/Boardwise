@@ -25,7 +25,7 @@ jobs:
       - run: pip install -r requirements.txt pyinstaller
       - run: echo "${{ github.run_number }}" > VERSION
         shell: bash
-      - run: pyinstaller --noconfirm --windowed --name MonterreyCount --add-data "VERSION:." main.py
+      - run: pyinstaller --noconfirm --windowed --name MonterreyCount --paths . --add-data "VERSION:." --add-data "models:models" monterrey_count/__main__.py
       - if: runner.os == 'macOS'
         run: ditto -c -k --keepParent dist/MonterreyCount.app ${{ matrix.asset }}
       - if: runner.os == 'Windows'
