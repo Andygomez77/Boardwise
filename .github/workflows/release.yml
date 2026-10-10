@@ -1,0 +1,48 @@
+# Cada push a main compila Mac + Windows y publica el release v<número de corrida>.
+name: release
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            asset: mac.zip
+          - os: windows-latest
+            asset: windows.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      - run: echo "${{ github.run_number }}" > VERSION
+        shell: bash
+      - run: pyinstaller --noconfirm --windowed --name Boardwise --add-data "VERSION:." main.py
+      - if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/Boardwise.app ${{ matrix.asset }}
+      - if: runner.os == 'Windows'
+        run: Compress-Archive dist/Boardwise ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: gh release create "v${{ github.run_number }}" mac.zip windows.zip --repo "${{ github.repository }}" --title "v${{ github.run_number }}" --notes "$NOTES"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
