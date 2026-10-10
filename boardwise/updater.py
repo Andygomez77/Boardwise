@@ -12,9 +12,11 @@ from pathlib import Path
 
 import certifi
 
-REPO = "TU_USUARIO/Boardwise"  # TODO: tu usuario/repo de GitHub
+from boardwise import paths
+
+REPO = "Andygomez77/Boardwise"
 ASSET = "mac.zip" if sys.platform == "darwin" else "windows.zip"
-TOKEN_FILE = Path.home() / ".boardwise" / "github_token"
+TOKEN_FILE = paths.data_dir() / "github_token"
 # certifi: el Python empaquetado no siempre encuentra los certificados del sistema
 _SSL = ssl.create_default_context(cafile=certifi.where())
 
@@ -34,7 +36,6 @@ def load_token() -> str | None:
 
 
 def save_token(token: str) -> None:
-    TOKEN_FILE.parent.mkdir(exist_ok=True)
     TOKEN_FILE.write_text(token)
     TOKEN_FILE.chmod(0o600)
 

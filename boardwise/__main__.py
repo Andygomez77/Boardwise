@@ -2,11 +2,10 @@ import sys
 import urllib.error
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressDialog
+from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox, QProgressDialog
 
-import updater
-
-TITLE = "Boardwise"
+from boardwise import updater
+from boardwise.ui.main_window import TITLE, MainWindow
 
 
 def update_if_available(app) -> bool:
@@ -57,10 +56,7 @@ def main():
     app = QApplication(sys.argv)
     if update_if_available(app):
         return
-    win = QMainWindow()
-    win.setWindowTitle(f"{TITLE} v{updater.current_version()}")
-    win.setCentralWidget(QLabel("Aquí va el contador.", alignment=Qt.AlignmentFlag.AlignCenter))
-    win.resize(900, 600)
+    win = MainWindow()
     win.show()
     sys.exit(app.exec())
 
