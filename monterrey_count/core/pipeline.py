@@ -12,6 +12,13 @@ import supervision as sv
 from .detector import Detector
 
 
+VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov")
+
+
+def list_videos(folder):
+    return sorted(path for path in Path(folder).iterdir() if path.suffix.lower() in VIDEO_EXTENSIONS)
+
+
 def _model_path():
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
     return root / "models" / "yolo11n.onnx"
@@ -30,13 +37,15 @@ class Counter:
         return detections
 
 
-def _frames(paths, counter, detector, skip_bad=False):
+def _frames(paths, counter, detector, skip_bad=False, on_skip=None):
     for video_path in paths:
         capture = cv2.VideoCapture(str(video_path))
         if not capture.isOpened():
             message = f"No se pudo abrir el video: {video_path}"
             if skip_bad:
                 warnings.warn(message, RuntimeWarning)
+                if on_skip:
+                    on_skip(video_path)
                 continue
             raise ValueError(message)
         try:
@@ -57,14 +66,14 @@ def run(video_path, line_start, line_end, model_path=None, detector=None):
         yield frame, detections, in_count, out_count
 
 
-def run_folder(folder, line_start, line_end, model_path=None, detector=None):
+def run_folder(folder, line_start, line_end, model_path=None, detector=None, on_skip=None):
     folder = Path(folder)
     if not folder.is_dir():
         raise ValueError(f"No se pudo abrir la carpeta: {folder}")
-    paths = sorted(path for path in folder.iterdir() if path.suffix.lower() in {".mp4", ".avi", ".mkv", ".mov"})
+    paths = list_videos(folder)
     counter = Counter(line_start, line_end)
     detector = detector or Detector(model_path or _model_path())
-    yield from _frames(paths, counter, detector, skip_bad=True)
+    yield from _frames(paths, counter, detector, skip_bad=True, on_skip=on_skip)
 
 
 def _line(value):
