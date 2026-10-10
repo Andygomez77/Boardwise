@@ -7,3 +7,5 @@ VERSION
 graphify-out/
 data/
 .handoff/
+MonterreyCount-Setup.exe
+*.dmg

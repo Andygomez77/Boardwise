@@ -2,6 +2,11 @@
 
 App de escritorio (PySide6) para contar pasajeros en videos.
 
+## Instalar
+
+- **Windows:** descarga `MonterreyCount-Setup.exe` del último release y ejecútalo. Como no está firmado, SmartScreen avisa: "Más información → Ejecutar de todas formas". Crea acceso directo en el escritorio.
+- **Mac:** abre `MonterreyCount.dmg` y arrastra la app a Aplicaciones. La primera vez, clic derecho → Abrir.
+
 ## Desarrollo
 
 ```sh
