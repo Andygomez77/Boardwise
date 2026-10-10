@@ -6,3 +6,4 @@ VERSION
 .venv/
 graphify-out/
 data/
+.handoff/
