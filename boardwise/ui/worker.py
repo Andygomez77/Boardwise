@@ -78,13 +78,13 @@ class Worker(QThread):
             count = frames = 0
             started = last = time.perf_counter()
             try:
-                for path, frame, detections, count in items:
+                for path, frame, detections, count, advanced in items:
                     if path != current:
                         current = path
                         rows.append([path.name, 0])
                         self.file_changed.emit(paths.index(path) + 1, len(paths), path.name)
                     rows[-1][1] = count
-                    frames += 1
+                    frames += advanced  # fps = cuadros de VIDEO por segundo (incluye los saltados)
                     now = time.perf_counter()
                     if now - last >= FRAME_INTERVAL:
                         last = now
