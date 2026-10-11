@@ -2,9 +2,9 @@ from pathlib import Path
 
 import cv2
 from PySide6.QtCore import QPointF, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
+                               QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from boardwise import updater
 from boardwise.core.pipeline import VIDEO_EXTENSIONS, list_videos
@@ -12,7 +12,15 @@ from boardwise.ui.worker import Worker, to_qimage
 
 TITLE = "Boardwise"
 BIG = "font-size: 28px; font-weight: bold"
+PANEL_WIDTH = 260
 CLOSE_PX = 10  # distancia en pantalla al primer vértice para cerrar el área
+
+
+def first_frame(path):
+    capture = cv2.VideoCapture(str(path))
+    ok, frame = capture.read()
+    capture.release()
+    return frame if ok else None
 
 
 class VideoView(QWidget):
@@ -113,8 +121,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{TITLE} v{updater.current_version()}")
-        self.source = None
         self.worker = None
+        self.paused = False
         self.provider = ""
 
         self.folder_button = QPushButton("Abrir carpeta…")
@@ -122,10 +130,14 @@ class MainWindow(QMainWindow):
         self.path_label = QLabel("Elige una carpeta o un video")
         self.view = VideoView()
         self.start_button = QPushButton("Iniciar")
+        self.pause_button = QPushButton("Pausar")
         self.stop_button = QPushButton("Detener")
         self.clear_button = QPushButton("Borrar área")
         self.count_label = QLabel()
         self.file_label = QLabel()
+        self.video_list = QListWidget()
+        self.all_button = QPushButton("Todos")
+        self.none_button = QPushButton("Ninguno")
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Archivo", "Subidas"])
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -137,28 +149,49 @@ class MainWindow(QMainWindow):
             top.addWidget(widget)
         top.setStretch(3, 1)
         controls = QHBoxLayout()
-        for widget in (self.start_button, self.stop_button, self.count_label, self.file_label):
+        for widget in (self.start_button, self.pause_button, self.stop_button, self.count_label, self.file_label):
             controls.addWidget(widget)
-        controls.setStretch(3, 1)
+        controls.setStretch(4, 1)
         layout = QVBoxLayout()
         layout.addLayout(top)
         layout.addWidget(QLabel("Haz clic en las esquinas del área; doble clic para cerrar"))
         layout.addWidget(self.view, 1)
         layout.addLayout(controls)
         layout.addWidget(self.table)
+        marks = QHBoxLayout()
+        marks.addWidget(self.all_button)
+        marks.addWidget(self.none_button)
+        panel = QVBoxLayout()
+        panel.addWidget(QLabel("Videos"))
+        panel.addWidget(self.video_list, 1)
+        panel.addLayout(marks)
+        panel.setContentsMargins(0, 0, 0, 0)
+        side = QWidget()
+        side.setLayout(panel)
+        side.setFixedWidth(PANEL_WIDTH)
+        layout.setContentsMargins(0, 0, 0, 0)
+        left = QWidget()
+        left.setLayout(layout)
         central = QWidget()
-        central.setLayout(layout)
+        main = QHBoxLayout(central)
+        main.addWidget(left, 1)
+        main.addWidget(side)
         self.setCentralWidget(central)
 
         self.folder_button.clicked.connect(self.open_folder)
         self.video_button.clicked.connect(self.open_video)
         self.start_button.clicked.connect(self.start)
+        self.pause_button.clicked.connect(self.toggle_pause)
         self.stop_button.clicked.connect(self.stop)
+        self.video_list.itemClicked.connect(self.show_first_frame)
+        self.video_list.itemChanged.connect(self._update_start)
+        self.all_button.clicked.connect(lambda: self._mark_all(Qt.CheckState.Checked))
+        self.none_button.clicked.connect(lambda: self._mark_all(Qt.CheckState.Unchecked))
         self.clear_button.clicked.connect(self.view.clear_area)
         self.view.changed.connect(self._update_start)
         self._reset()
         self._busy(False)
-        self.resize(1000, 800)
+        self.resize(1300, 800)
 
     def _reset(self):
         self.count_label.setText("Subidas: 0")
@@ -169,11 +202,30 @@ class MainWindow(QMainWindow):
         for widget in (self.folder_button, self.video_button, self.view, self.clear_button):
             widget.setEnabled(not busy)
         self.stop_button.setEnabled(busy)
+        self.pause_button.setEnabled(busy)
+        self.pause_button.setText("Pausar")
+        self.paused = False
+        for widget in (self.all_button, self.none_button):
+            widget.setEnabled(not busy)
+        for item in self._items():  # con la lista bloqueada no se pueden marcar
+            flags = item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+            item.setFlags(flags & ~Qt.ItemFlag.ItemIsUserCheckable if busy else flags)
+            item.setBackground(QBrush())
         self._update_start()
+
+    def _items(self):
+        return [self.video_list.item(row) for row in range(self.video_list.count())]
+
+    def _checked(self):
+        return [item for item in self._items() if item.checkState() == Qt.CheckState.Checked]
+
+    def _mark_all(self, state):
+        for item in self._items():
+            item.setCheckState(state)
 
     def _update_start(self):
         busy = self.stop_button.isEnabled()
-        self.start_button.setEnabled(bool(self.source) and self.view.ready() and not busy)
+        self.start_button.setEnabled(bool(self._checked()) and self.view.ready() and not busy)
 
     def open_folder(self):
         path = QFileDialog.getExistingDirectory(self, "Abrir carpeta")
@@ -190,38 +242,75 @@ class MainWindow(QMainWindow):
         path = Path(path)
         videos = list_videos(path) if path.is_dir() else [path]
         for video in videos:
-            capture = cv2.VideoCapture(str(video))
-            ok, frame = capture.read()
-            capture.release()
-            if ok:
+            frame = first_frame(video)
+            if frame is not None:
                 break
         else:
             QMessageBox.warning(self, TITLE, "No se pudo abrir ningún video de esa ruta.")
             return
-        self.source = path
         self.path_label.setText(f"{path}  ({len(videos)} videos)" if path.is_dir() else str(path))
         self._reset()
+        self.video_list.clear()
+        for item_path in videos:
+            item = QListWidgetItem(item_path.name)
+            item.setData(Qt.ItemDataRole.UserRole, item_path)
+            item.setCheckState(Qt.CheckState.Checked)
+            self.video_list.addItem(item)
+        self.video_list.setCurrentRow(videos.index(video))
         self.view.set_frame(to_qimage(frame))
         self.view.set_default_area()
+
+    def show_first_frame(self, item):
+        if not self.folder_button.isEnabled():  # procesando
+            return
+        path = item.data(Qt.ItemDataRole.UserRole)
+        frame = first_frame(path)
+        if frame is None:
+            self.statusBar().showMessage(f"No se pudo abrir: {path.name}")
+        else:
+            self.view.set_frame(to_qimage(frame))  # el área dibujada se conserva
 
     def start(self):
         self._reset()
         self._busy(True)
         self.statusBar().showMessage("Cargando modelo…")
-        self.worker = worker = Worker(self.source, self.view.polygon)
+        paths = [item.data(Qt.ItemDataRole.UserRole) for item in self._checked()]
+        self.worker = worker = Worker(paths, self.view.polygon)
         worker.frame.connect(self.view.set_frame)
         worker.counts.connect(self.show_counts)
-        worker.file_changed.connect(lambda i, n, name: self.file_label.setText(f"Archivo {i}/{n}: {name}"))
+        worker.file_changed.connect(self.show_file)
         worker.file_skipped.connect(lambda name: self.file_label.setText(f"No se pudo abrir: {name}"))
         worker.provider.connect(self.set_provider)
-        worker.fps.connect(lambda fps: self.statusBar().showMessage(f"{self.provider} · {fps:.0f} fps"))
+        worker.fps.connect(self.show_fps)
         worker.done.connect(self.show_table)
         worker.error.connect(self.show_error)
         worker.start()
 
+    def show_fps(self, fps):
+        if not self.paused:
+            self.statusBar().showMessage(f"{self.provider} · {fps:.0f} fps")
+
+    def show_file(self, index, total, name):
+        self.file_label.setText(f"Videos: {index}/{total} · {name}")
+        current = self._checked()[index - 1]
+        for item in self._items():
+            item.setBackground(QColor(255, 220, 120) if item is current else QBrush())
+        self.video_list.scrollToItem(current)
+
+    def toggle_pause(self):
+        self.paused = not self.paused
+        self.pause_button.setText("Reanudar" if self.paused else "Pausar")
+        if self.paused:
+            self.worker.pause()
+            self.statusBar().showMessage("En pausa")
+        else:
+            self.worker.resume()
+            self.statusBar().showMessage(self.provider)
+
     def stop(self):
         self.stop_button.setEnabled(False)
-        self.worker.requestInterruption()
+        self.pause_button.setEnabled(False)
+        self.worker.stop()
 
     def set_provider(self, provider):
         self.provider = provider
@@ -251,6 +340,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.worker:
-            self.worker.requestInterruption()
+            self.worker.stop()
             self.worker.wait()
         super().closeEvent(event)

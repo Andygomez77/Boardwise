@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer
+from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -17,14 +17,26 @@ QMessageBox.critical = staticmethod(lambda parent, title, message: errors.append
 app = QApplication([])
 win = MainWindow()
 win.set_source(Path(__file__).resolve().parents[1] / "data" / "sample_folder")
-win.start()
-loop = QEventLoop()
-win.worker.done.connect(loop.quit)
-win.worker.error.connect(loop.quit)
-QTimer.singleShot(120_000, loop.quit)
-loop.exec()
 
-assert not errors, errors
+
+def wait_for(signal, ms=120_000):
+    loop = QEventLoop()
+    signal.connect(loop.quit)
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(loop.quit)
+    timer.start(ms)
+    loop.exec()
+    timer.stop()
+
+
+def run_to_end():
+    win.start()
+    wait_for(win.worker.done)
+    assert not errors, errors
+
+
+run_to_end()
 table = win.table
 assert table.rowCount() == 4, table.rowCount()
 assert table.item(3, 0).text() == "TOTAL"
@@ -32,6 +44,50 @@ total = int(table.item(3, 1).text())
 assert total > 0, total
 assert win.count_label.text() == f"Subidas: {total}"
 print("total subidas (área por defecto):", total)
+
+# Solo 2 de los 3 videos marcados: la tabla tiene exactamente esas 2 filas + TOTAL
+assert win.video_list.count() == 3 and len(win._checked()) == 3
+win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
+names = [win.video_list.item(0).text(), win.video_list.item(2).text()]
+run_to_end()
+assert [table.item(r, 0).text() for r in range(table.rowCount())] == names + ["TOTAL"], table.rowCount()
+reference = table.item(2, 1).text()
+print("total con 2 videos:", reference)
+win.none_button.click()
+assert not win.start_button.isEnabled()
+win.all_button.click()
+assert win.start_button.isEnabled()
+win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
+
+# Pausar a mitad: no llegan cuadros ni conteos en pausa; al reanudar termina con el mismo total
+win.start()
+seen = []
+win.worker.frame.connect(lambda _: seen.append("frame"))
+win.worker.counts.connect(lambda _: seen.append("count"))
+wait_for(win.worker.frame)
+win.pause_button.click()
+assert win.pause_button.text() == "Reanudar"
+QTest.qWait(300)  # deja pasar lo que ya venía en camino
+assert win.statusBar().currentMessage() == "En pausa"
+before = len(seen)
+QTest.qWait(1000)
+assert len(seen) == before, (before, len(seen))
+win.pause_button.click()
+assert win.pause_button.text() == "Pausar"
+wait_for(win.worker.done)
+assert not errors, errors
+assert table.item(2, 1).text() == reference, (table.item(2, 1).text(), reference)
+
+# Detener estando en pausa termina el hilo
+win.start()
+worker = win.worker
+wait_for(worker.frame)
+win.pause_button.click()
+QTest.qWait(300)
+win.stop_button.click()
+assert worker.wait(5000)
+app.processEvents()
+assert win.start_button.isEnabled() and not win.pause_button.isEnabled()
 
 # Dibujar un área con clics: coordenadas en píxeles del video
 view = win.view
@@ -66,4 +122,12 @@ for point in points[:3]:
     click(point)
 click((points[0][0] + 5, points[0][1] + 5))
 assert view.closed and len(view.polygon) == 3, view.polygon
+
+# Cerrar la ventana en pausa no se cuelga
+win.start()
+worker = win.worker
+wait_for(worker.frame)
+win.pause_button.click()
+win.close()
+assert worker.isFinished()
 print("ok")

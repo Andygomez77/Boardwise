@@ -81,14 +81,17 @@ def run(video_path, polygon, model_path=None, detector=None):
         yield frame, detections, count
 
 
+def run_videos(paths, polygon, model_path=None, detector=None, on_skip=None):
+    counter = Counter(polygon)
+    detector = detector or Detector(model_path or _model_path())
+    yield from _frames(paths, counter, detector, skip_bad=True, on_skip=on_skip)
+
+
 def run_folder(folder, polygon, model_path=None, detector=None, on_skip=None):
     folder = Path(folder)
     if not folder.is_dir():
         raise ValueError(f"No se pudo abrir la carpeta: {folder}")
-    paths = list_videos(folder)
-    counter = Counter(polygon)
-    detector = detector or Detector(model_path or _model_path())
-    yield from _frames(paths, counter, detector, skip_bad=True, on_skip=on_skip)
+    yield from run_videos(list_videos(folder), polygon, model_path, detector, on_skip)
 
 
 def _zone(value):
