@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from PySide6.QtGui import QPixmap
 
+from boardwise.core.pipeline import run
 from boardwise.ui.main_window import MainWindow, first_frame
 from boardwise.ui.worker import to_qimage
 
@@ -48,6 +49,13 @@ total = int(table.item(3, 1).text())
 assert total > 0, total
 assert win.count_label.text() == f"Subidas: {total}"
 print("total subidas (área por defecto):", total)
+
+# Cada fila (modo paralelo) == el video procesado solo con un Counter nuevo
+for row in range(3):
+    path = Path(__file__).resolve().parents[1] / "data" / "sample_folder" / table.item(row, 0).text()
+    alone = list(run(path, win.view.polygon))[-1][2]
+    assert int(table.item(row, 1).text()) == alone, (path.name, table.item(row, 1).text(), alone)
+assert total == sum(int(table.item(row, 1).text()) for row in range(3))
 
 # Solo 2 de los 3 videos marcados: la tabla tiene exactamente esas 2 filas + TOTAL
 assert win.video_list.count() == 3 and len(win._checked()) == 3

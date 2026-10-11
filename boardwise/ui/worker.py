@@ -5,8 +5,7 @@ import cv2
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from boardwise.core.detector import Detector
-from boardwise.core.pipeline import Counter, _model_path, run_videos
+from boardwise.core.pipeline import PARALLEL_VIDEOS, run_parallel
 
 FRAME_INTERVAL = 1 / 15  # el proceso va a ~80 fps; la vista no necesita tanto
 
@@ -20,7 +19,8 @@ def to_qimage(frame):
 class Worker(QThread):
     frame = Signal(QImage)
     counts = Signal(int)
-    file_changed = Signal(int, int, str)
+    file_started = Signal(int)  # posición en la lista
+    file_finished = Signal(int)
     file_skipped = Signal(str)
     provider = Signal(str)
     fps = Signal(float)
@@ -31,7 +31,9 @@ class Worker(QThread):
         super().__init__()
         self.paths = list(paths)
         self.polygon = polygon
-        self.counter = Counter(polygon)
+        self._lock = threading.Lock()  # los callbacks de run_parallel llegan desde varios hilos
+        self._running = set()  # posiciones de los videos en curso
+        self._counters = {}  # video -> su Counter (para colorear las cajas)
         self._go = threading.Event()  # apagado = en pausa; el hilo duerme en wait()
         self._go.set()
 
@@ -45,14 +47,14 @@ class Worker(QThread):
         self.requestInterruption()
         self._go.set()  # despierta el hilo si está en pausa
 
-    def _annotate(self, frame, detections):
+    def _annotate(self, frame, detections, counter):
         # gris: fuera del área · amarillo: dentro, aún sin contar · verde: ya contada
         if detections.tracker_id is None:
             return frame
         for box, track_id in zip(detections.xyxy.astype(int), detections.tracker_id):
-            if track_id in self.counter.counted:
+            if track_id in counter.counted:
                 color = (0, 200, 0)
-            elif track_id in self.counter.inside_ids:
+            elif track_id in counter.inside_ids:
                 color = (0, 220, 255)
             else:
                 color = (160, 160, 160)
@@ -63,34 +65,46 @@ class Worker(QThread):
         return frame
 
     def run(self):
-        rows = []  # [nombre, subidas acumuladas]
+        paths = self.paths
+        index = {path: i for i, path in enumerate(paths)}
+        final = {}  # video -> conteo final (o el último); solo lo escribe este hilo
+        skipped = []
 
         def skip(path):
-            rows.append([path.name, None])
+            skipped.append(path)
+            self.file_finished.emit(index[path])
             self.file_skipped.emit(path.name)
 
+        def start(path, counter, detector):
+            with self._lock:
+                if not self._counters:
+                    self.provider.emit(detector.provider)
+                self._counters[path] = counter
+                self._running.add(index[path])
+            self.file_started.emit(index[path])
+
+        def finish(path):
+            with self._lock:
+                self._running.discard(index[path])
+            self.file_finished.emit(index[path])
+
         try:
-            detector = Detector(_model_path())
-            self.provider.emit(detector.provider)
-            paths = self.paths
-            items = run_videos(paths, self.polygon, detector=detector, on_skip=skip, counter=self.counter)
-            current = None
-            count = frames = 0
+            items = run_parallel(paths, self.polygon, PARALLEL_VIDEOS, on_skip=skip, on_start=start, on_done=finish)
+            frames = 0
             started = last = time.perf_counter()
             try:
                 for path, frame, detections, count, advanced in items:
-                    if path != current:
-                        current = path
-                        rows.append([path.name, 0])
-                        self.file_changed.emit(paths.index(path) + 1, len(paths), path.name)
-                    rows[-1][1] = count
-                    frames += advanced  # fps = cuadros de VIDEO por segundo (incluye los saltados)
+                    final[path] = count
+                    frames += advanced  # fps = cuadros de VIDEO por segundo (todos los hilos, incluye los saltados)
                     now = time.perf_counter()
                     if now - last >= FRAME_INTERVAL:
-                        last = now
-                        self.frame.emit(to_qimage(self._annotate(frame, detections)))
-                        self.counts.emit(count)
-                        self.fps.emit(frames / (now - started))
+                        with self._lock:
+                            preview = min(self._running, default=None)
+                        if index[path] == preview:  # la vista sigue al video en curso de menor posición
+                            last = now
+                            self.frame.emit(to_qimage(self._annotate(frame, detections, self._counters[path])))
+                            self.counts.emit(sum(final.values()))
+                            self.fps.emit(frames / (now - started))
                     if not self._go.is_set():
                         paused = time.perf_counter()
                         self._go.wait()
@@ -98,17 +112,9 @@ class Worker(QThread):
                     if self.isInterruptionRequested():
                         break
             finally:
-                items.close()  # suelta el video aunque se detenga a medias
-            self.counts.emit(count)
+                items.close()  # termina los hilos aunque se detenga a medias
+            self.counts.emit(sum(final.values()))
         except Exception as e:
             self.error.emit(str(e))
             return
-        result = []
-        previous = 0
-        for name, total in rows:
-            if total is None:
-                result.append((name, None))
-            else:
-                result.append((name, total - previous))
-                previous = total
-        self.done.emit(result)
+        self.done.emit([(path.name, final.get(path)) for path in paths if path in final or path in skipped])

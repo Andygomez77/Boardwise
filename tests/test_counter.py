@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import supervision as sv
 
-from boardwise.core.pipeline import Counter, run_videos
+from boardwise.core.pipeline import Counter, run_parallel, run_videos
 
 AREA = [(0, 35), (100, 35), (100, 85), (0, 85)]  # se cuenta el centro de la caja (pies - 15)
 
@@ -75,4 +75,20 @@ assert threading.active_count() == threads, threading.enumerate()
 missing = []
 assert list(run_videos([video.with_name("no_existe.mp4"), video], AREA, detector=Empty(), on_skip=missing.append, stride=30))
 assert len(missing) == 1 and threading.active_count() == threads
+
+# (h) run_parallel: cerrar a mitad no deja hilos; sin cerrar, cada video cuenta igual que solo
+folder = video.parent
+videos = sorted(folder.glob("*.mp4"))
+items = run_parallel(videos, AREA, workers=3)
+for _ in range(30):
+    next(items)
+items.close()
+assert threading.active_count() == threads, threading.enumerate()
+started, done = [], []
+last = {}
+for path, _, _, count, _ in run_parallel(videos, AREA, workers=2, on_start=lambda p, c, d: started.append(p), on_done=done.append):
+    last[path] = count
+alone = {path: list(run_videos([path], AREA))[-1][3] for path in videos}
+assert last == alone and sorted(started) == sorted(done) == videos, (last, alone)
+assert threading.active_count() == threads
 print("ok")

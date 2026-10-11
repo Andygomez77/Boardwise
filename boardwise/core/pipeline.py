@@ -18,6 +18,7 @@ from .detector import Detector
 VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov")
 MIN_FRAMES_INSIDE = 3
 ANALYZE_FPS = 8  # cuadros analizados por segundo de video
+PARALLEL_VIDEOS = 2  # videos a la vez; 2-4 rinden igual (~390 fps vs ~245 con 1): la GPU (DirectML) se serializa
 
 
 def list_videos(folder):
@@ -55,6 +56,19 @@ class Counter:
                 self.counted.add(track_id)
         # ponytail: si el tracker pierde a alguien y le da otro ID, puede contarse doble; subir MIN_FRAMES_INSIDE o ReID si estorba.
         return detections
+
+
+class _Serial:
+    """DirectML se cae (access violation) si dos hilos usan el dispositivo a la vez, aun con sesiones distintas."""
+
+    lock = threading.Lock()
+
+    def __init__(self, session):
+        self.session = session
+
+    def run(self, *args):
+        with self.lock:
+            return self.session.run(*args)
 
 
 def _read(capture, stride, frames, stop):
@@ -139,6 +153,83 @@ def run_folder(folder, polygon, model_path=None, detector=None, on_skip=None, st
     yield from run_videos(list_videos(folder), polygon, model_path, detector, on_skip, stride=stride)
 
 
+def run_parallel(paths, polygon, workers=PARALLEL_VIDEOS, model_path=None, on_skip=None, on_start=None, on_done=None, stride=None):
+    """Varios videos a la vez: un hilo por video en curso, cada uno con su Counter y su Detector (sesión propia).
+
+    Hace yield de (video_path, frame, detections, count_de_ese_video, advanced).
+    on_start(path, counter, detector) y on_done(path) se llaman desde los hilos; un video que no abre solo llama a on_skip.
+    """
+    # ponytail: cada video tiene su propio tracker; quien sube justo en el corte entre dos archivos puede contarse doble o perderse (run_videos comparte el Counter).
+    pending = queue.Queue()
+    for path in paths:
+        pending.put(path)
+    results = queue.Queue(maxsize=8)  # llena (consumidor en pausa) = todos los hilos esperan
+    stop = threading.Event()
+    detectors = []  # se sueltan al final, ya sin hilos: destruir una sesión DirectML mientras otro hilo infiere también tumba el proceso
+
+    def put(item):
+        while not stop.is_set():
+            try:
+                results.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                pass
+
+    def work():
+        detector = None  # se reutiliza entre los videos de este hilo
+        try:
+            while not stop.is_set():
+                try:
+                    path = pending.get_nowait()
+                except queue.Empty:
+                    break
+                if not detector:
+                    with _Serial.lock:  # crear una sesión mientras otro hilo infiere también tumba DirectML
+                        detector = Detector(model_path or _model_path())
+                    detectors.append(detector)
+                    if detector.provider == "DmlExecutionProvider":
+                        detector.session = _Serial(detector.session)
+                counter = Counter(polygon)
+                items = _frames([path], counter, detector, skip_bad=True, on_skip=on_skip, stride=stride)
+                started = False
+                try:
+                    for item in items:
+                        if stop.is_set():
+                            break
+                        if not started:
+                            started = True
+                            if on_start:
+                                on_start(path, counter, detector)
+                        put(item)
+                    else:
+                        if started and on_done:
+                            on_done(path)
+                finally:
+                    items.close()
+        except Exception as error:
+            put(error)
+        put(None)
+
+    threads = [threading.Thread(target=work, daemon=True) for _ in range(max(1, min(workers, len(paths))))]
+    for thread in threads:
+        thread.start()
+    try:
+        alive = len(threads)
+        while alive:
+            item = results.get()
+            if item is None:
+                alive -= 1
+            elif isinstance(item, Exception):
+                raise item
+            else:
+                yield item
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join()
+        detectors.clear()
+
+
 def _zone(value):
     try:
         numbers = list(map(int, value.split(",")))
@@ -155,17 +246,24 @@ def main():
     parser.add_argument("--zone", required=True, type=_zone)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--stride", type=int)  # por defecto automático
+    parser.add_argument("--parallel", type=int, default=PARALLEL_VIDEOS)  # videos a la vez; 1 = secuencial con el mismo Counter
     args = parser.parse_args()
     polygon = args.zone
     source = Path(args.video)
     folder = source.is_dir()
-    detector = Detector(_model_path())
-    print(f"provider: {detector.provider}")
-    generator = run_folder(source, polygon, detector=detector, stride=args.stride) if folder else run(source, polygon, detector=detector, stride=args.stride)
+    parallel = folder and args.parallel > 1
+    detector = None if parallel else Detector(_model_path())
+    if detector:
+        print(f"provider: {detector.provider}")
+    if parallel:
+        generator = run_parallel(list_videos(source), polygon, workers=args.parallel, stride=args.stride)
+    elif folder:
+        generator = run_folder(source, polygon, detector=detector, stride=args.stride)
+    else:
+        generator = run(source, polygon, detector=detector, stride=args.stride)
     frames = 0
     started = time.perf_counter()
     show = args.show and "GUI: NONE" not in cv2.getBuildInformation()
-    current = None
     counts = {}
     try:
         for item in generator:
@@ -174,10 +272,9 @@ def main():
             else:
                 frame, detections, count, advanced = item
                 path = source
-            if path != current:
-                current = path
+            if path not in counts:
                 print(f"{path.name}: stride {advanced}")  # lo avanzado en el primer cuadro = stride usado
-            counts[current] = count
+            counts[path] = count
             frames += advanced
             if show:
                 frame = sv.BoxAnnotator().annotate(frame, detections)
@@ -189,16 +286,18 @@ def main():
                     break
     except ValueError as error:
         raise SystemExit(str(error)) from error
+    generator.close()
     if show:
         cv2.destroyAllWindows()
     elapsed = time.perf_counter() - started
     print(f"fps: {frames / elapsed:.2f}")
+    values = list(counts.values())
+    if folder and not parallel:  # el Counter compartido acumula entre videos
+        values = [b - a for a, b in zip([0] + values, values)]
     if folder:
-        previous = 0
-        for path, count in counts.items():
-            print(f"{path.name}: subidas: {count - previous}")
-            previous = count
-    print(f"total subidas: {next(reversed(counts.values()), 0)}")
+        for path, count in zip(counts, values):
+            print(f"{path.name}: subidas: {count}")
+    print(f"total subidas: {sum(values)}")
 
 
 if __name__ == "__main__":
