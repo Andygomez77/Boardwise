@@ -4,7 +4,7 @@ import supervision as sv
 
 from monterrey_count.core.pipeline import Counter
 
-AREA = [(0, 50), (100, 50), (100, 100), (0, 100)]
+AREA = [(0, 35), (100, 35), (100, 85), (0, 85)]  # se cuenta el centro de la caja (pies - 15)
 
 
 def boxes(*people):  # cada persona: (x, y de los pies); caja de 20x30
@@ -46,4 +46,9 @@ assert counter.count == 1, counter.count
 counter = Counter(AREA)
 feed(counter, [[(20, y), (80, y)] for y in range(30, 70, 5)] + [[(20, 70), (80, 70)]] * 5)
 assert counter.count == 2, counter.count
+
+# (f) el centro entra al área pero los pies quedan fuera: cuenta
+counter = Counter(AREA)
+feed(counter, [[(50, 95)]] * 5)
+assert counter.count == 1, counter.count
 print("ok")
