@@ -27,15 +27,16 @@ def _model_path():
 
 
 class Counter:
-    """Cuenta personas (IDs del tracker) cuyos pies estuvieron dentro del área al menos MIN_FRAMES_INSIDE cuadros."""
+    """Cuenta personas (IDs del tracker) cuyo centro estuvo dentro del área al menos MIN_FRAMES_INSIDE cuadros."""
 
     def __init__(self, polygon):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
             self.tracker = sv.ByteTrack()
-        self.zone = sv.PolygonZone(np.array(polygon), triggering_anchors=(sv.Position.BOTTOM_CENTER,))
+        self.zone = sv.PolygonZone(np.array(polygon), triggering_anchors=(sv.Position.CENTER,))
         self.frames_inside = {}
         self.counted = set()
+        self.inside_ids = set()  # IDs dentro del área en el último cuadro
 
     @property
     def count(self):
@@ -44,6 +45,7 @@ class Counter:
     def update(self, detections):
         detections = self.tracker.update_with_detections(detections)
         inside = self.zone.trigger(detections)
+        self.inside_ids = set(detections.tracker_id[inside])
         for track_id in detections.tracker_id[inside]:
             self.frames_inside[track_id] = self.frames_inside.get(track_id, 0) + 1
             if self.frames_inside[track_id] >= MIN_FRAMES_INSIDE:
@@ -81,8 +83,8 @@ def run(video_path, polygon, model_path=None, detector=None):
         yield frame, detections, count
 
 
-def run_videos(paths, polygon, model_path=None, detector=None, on_skip=None):
-    counter = Counter(polygon)
+def run_videos(paths, polygon, model_path=None, detector=None, on_skip=None, counter=None):
+    counter = counter or Counter(polygon)
     detector = detector or Detector(model_path or _model_path())
     yield from _frames(paths, counter, detector, skip_bad=True, on_skip=on_skip)
 

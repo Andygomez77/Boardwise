@@ -9,7 +9,10 @@ from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from boardwise.ui.main_window import MainWindow
+from PySide6.QtGui import QPixmap
+
+from boardwise.ui.main_window import MainWindow, first_frame
+from boardwise.ui.worker import to_qimage
 
 errors = []
 QMessageBox.critical = staticmethod(lambda parent, title, message: errors.append(message))
@@ -78,6 +81,21 @@ wait_for(win.worker.done)
 assert not errors, errors
 assert table.item(2, 1).text() == reference, (table.item(2, 1).text(), reference)
 
+# Al terminar, la vista vuelve al primer cuadro limpio del video seleccionado (sin cajas ni área quemada)
+selected = win.video_list.currentItem().data(Qt.ItemDataRole.UserRole)
+clean = QPixmap.fromImage(to_qimage(first_frame(selected))).toImage()
+assert win.view.pix.toImage() == clean
+
+# Iniciar arranca desde el video seleccionado (aunque no esté marcado) y sigue con los marcados siguientes
+win.all_button.click()
+win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
+win.video_list.setCurrentRow(1)
+run_to_end()
+assert win.video_list.item(1).checkState() == Qt.CheckState.Checked
+assert [table.item(r, 0).text() for r in range(table.rowCount())] == ["segment_01.mp4", "segment_02.mp4", "TOTAL"],     [table.item(r, 0).text() for r in range(table.rowCount())]
+win.video_list.setCurrentRow(0)
+win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
+
 # Detener estando en pausa termina el hilo
 win.start()
 worker = win.worker
@@ -122,6 +140,7 @@ for point in points[:3]:
     click(point)
 click((points[0][0] + 5, points[0][1] + 5))
 assert view.closed and len(view.polygon) == 3, view.polygon
+assert all(close_to(a, b) for a, b in zip(view.polygon, points[:3])), view.polygon  # solo los puntos nuevos
 
 # Cerrar la ventana en pausa no se cuelga
 win.start()

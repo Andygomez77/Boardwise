@@ -2,13 +2,11 @@ import threading
 import time
 
 import cv2
-import numpy as np
-import supervision as sv
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
 from boardwise.core.detector import Detector
-from boardwise.core.pipeline import _model_path, run_videos
+from boardwise.core.pipeline import Counter, _model_path, run_videos
 
 FRAME_INTERVAL = 1 / 15  # el proceso va a ~80 fps; la vista no necesita tanto
 
@@ -33,6 +31,7 @@ class Worker(QThread):
         super().__init__()
         self.paths = list(paths)
         self.polygon = polygon
+        self.counter = Counter(polygon)
         self._go = threading.Event()  # apagado = en pausa; el hilo duerme en wait()
         self._go.set()
 
@@ -47,11 +46,20 @@ class Worker(QThread):
         self._go.set()  # despierta el hilo si está en pausa
 
     def _annotate(self, frame, detections):
-        frame = sv.BoxAnnotator().annotate(frame, detections)
-        if detections.tracker_id is not None:
-            labels = [str(track_id) for track_id in detections.tracker_id]
-            frame = sv.LabelAnnotator().annotate(frame, detections, labels=labels)
-        cv2.polylines(frame, [np.array(self.polygon)], True, (0, 255, 0), 2)
+        # gris: fuera del área · amarillo: dentro, aún sin contar · verde: ya contada
+        if detections.tracker_id is None:
+            return frame
+        for box, track_id in zip(detections.xyxy.astype(int), detections.tracker_id):
+            if track_id in self.counter.counted:
+                color = (0, 200, 0)
+            elif track_id in self.counter.inside_ids:
+                color = (0, 220, 255)
+            else:
+                color = (160, 160, 160)
+            x1, y1, x2, y2 = box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), 6, color, -1)
+            cv2.putText(frame, f"#{track_id}", (x1, max(y1 - 6, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         return frame
 
     def run(self):
@@ -65,7 +73,7 @@ class Worker(QThread):
             detector = Detector(_model_path())
             self.provider.emit(detector.provider)
             paths = self.paths
-            items = run_videos(paths, self.polygon, detector=detector, on_skip=skip)
+            items = run_videos(paths, self.polygon, detector=detector, on_skip=skip, counter=self.counter)
             current = None
             count = frames = 0
             started = last = time.perf_counter()

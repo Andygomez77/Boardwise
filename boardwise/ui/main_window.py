@@ -272,9 +272,13 @@ class MainWindow(QMainWindow):
 
     def start(self):
         self._reset()
-        self._busy(True)
         self.statusBar().showMessage("Cargando modelo…")
-        paths = [item.data(Qt.ItemDataRole.UserRole) for item in self._checked()]
+        items = self._items()
+        row = max(self.video_list.currentRow(), 0)
+        items[row].setCheckState(Qt.CheckState.Checked)  # empieza desde el seleccionado
+        self.run_items = [item for item in items[row:] if item.checkState() == Qt.CheckState.Checked]
+        paths = [item.data(Qt.ItemDataRole.UserRole) for item in self.run_items]
+        self._busy(True)
         self.worker = worker = Worker(paths, self.view.polygon)
         worker.frame.connect(self.view.set_frame)
         worker.counts.connect(self.show_counts)
@@ -292,7 +296,7 @@ class MainWindow(QMainWindow):
 
     def show_file(self, index, total, name):
         self.file_label.setText(f"Videos: {index}/{total} · {name}")
-        current = self._checked()[index - 1]
+        current = self.run_items[index - 1]
         for item in self._items():
             item.setBackground(QColor(255, 220, 120) if item is current else QBrush())
         self.video_list.scrollToItem(current)
@@ -322,6 +326,9 @@ class MainWindow(QMainWindow):
     def _finish(self):
         self.worker.wait()
         self._busy(False)
+        item = self.video_list.currentItem()
+        if item:
+            self.show_first_frame(item)  # imagen limpia para volver a dibujar el área
 
     def show_table(self, rows):
         self.table.setRowCount(len(rows) + 1)
