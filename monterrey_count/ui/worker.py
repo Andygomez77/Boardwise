@@ -1,5 +1,5 @@
+import threading
 import time
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -8,7 +8,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
 from monterrey_count.core.detector import Detector
-from monterrey_count.core.pipeline import _model_path, list_videos, run, run_folder
+from monterrey_count.core.pipeline import _model_path, run_videos
 
 FRAME_INTERVAL = 1 / 15  # el proceso va a ~80 fps; la vista no necesita tanto
 
@@ -29,10 +29,22 @@ class Worker(QThread):
     done = Signal(list)  # [(nombre, subidas)]; (nombre, None) si no se pudo abrir
     error = Signal(str)
 
-    def __init__(self, source, polygon):
+    def __init__(self, paths, polygon):
         super().__init__()
-        self.source = Path(source)
+        self.paths = list(paths)
         self.polygon = polygon
+        self._go = threading.Event()  # apagado = en pausa; el hilo duerme en wait()
+        self._go.set()
+
+    def pause(self):
+        self._go.clear()
+
+    def resume(self):
+        self._go.set()
+
+    def stop(self):
+        self.requestInterruption()
+        self._go.set()  # despierta el hilo si está en pausa
 
     def _annotate(self, frame, detections):
         frame = sv.BoxAnnotator().annotate(frame, detections)
@@ -52,12 +64,8 @@ class Worker(QThread):
         try:
             detector = Detector(_model_path())
             self.provider.emit(detector.provider)
-            folder = self.source.is_dir()
-            paths = list_videos(self.source) if folder else [self.source]
-            if folder:
-                items = run_folder(self.source, self.polygon, detector=detector, on_skip=skip)
-            else:
-                items = ((self.source, *item) for item in run(self.source, self.polygon, detector=detector))
+            paths = self.paths
+            items = run_videos(paths, self.polygon, detector=detector, on_skip=skip)
             current = None
             count = frames = 0
             started = last = time.perf_counter()
@@ -75,6 +83,10 @@ class Worker(QThread):
                         self.frame.emit(to_qimage(self._annotate(frame, detections)))
                         self.counts.emit(count)
                         self.fps.emit(frames / (now - started))
+                    if not self._go.is_set():
+                        paused = time.perf_counter()
+                        self._go.wait()
+                        started += time.perf_counter() - paused  # el fps no cuenta la pausa
                     if self.isInterruptionRequested():
                         break
             finally:
