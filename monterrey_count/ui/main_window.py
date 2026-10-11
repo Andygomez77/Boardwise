@@ -124,6 +124,8 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.paused = False
         self.provider = ""
+        self.running = set()  # posiciones (en run_items) de los videos en curso
+        self.finished = 0
 
         self.folder_button = QPushButton("Abrir carpeta…")
         self.video_button = QPushButton("Abrir video…")
@@ -278,11 +280,14 @@ class MainWindow(QMainWindow):
         items[row].setCheckState(Qt.CheckState.Checked)  # empieza desde el seleccionado
         self.run_items = [item for item in items[row:] if item.checkState() == Qt.CheckState.Checked]
         paths = [item.data(Qt.ItemDataRole.UserRole) for item in self.run_items]
+        self.running, self.finished = set(), 0
+        self.show_progress()
         self._busy(True)
         self.worker = worker = Worker(paths, self.view.polygon)
         worker.frame.connect(self.view.set_frame)
         worker.counts.connect(self.show_counts)
-        worker.file_changed.connect(self.show_file)
+        worker.file_started.connect(self.file_started)
+        worker.file_finished.connect(self.file_finished)
         worker.file_skipped.connect(lambda name: self.file_label.setText(f"No se pudo abrir: {name}"))
         worker.provider.connect(self.set_provider)
         worker.fps.connect(self.show_fps)
@@ -294,12 +299,23 @@ class MainWindow(QMainWindow):
         if not self.paused:
             self.statusBar().showMessage(f"{self.provider} · {fps:.0f} fps")
 
-    def show_file(self, index, total, name):
-        self.file_label.setText(f"Videos: {index}/{total} · {name}")
-        current = self.run_items[index - 1]
+    def file_started(self, index):
+        self.running.add(index)
+        self.show_progress()
+
+    def file_finished(self, index):
+        self.running.discard(index)
+        self.finished += 1
+        self.show_progress()
+
+    def show_progress(self):
+        self.file_label.setText(f"Videos: {self.finished}/{len(self.run_items)}")
         for item in self._items():
-            item.setBackground(QColor(255, 220, 120) if item is current else QBrush())
-        self.video_list.scrollToItem(current)
+            item.setBackground(QBrush())
+        for index in self.running:
+            self.run_items[index].setBackground(QColor(255, 220, 120))
+        if self.running:
+            self.video_list.scrollToItem(self.run_items[min(self.running)])
 
     def toggle_pause(self):
         self.paused = not self.paused
