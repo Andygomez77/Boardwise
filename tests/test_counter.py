@@ -1,8 +1,12 @@
 """python -m tests.test_counter"""
+import threading
+from pathlib import Path
+
+import cv2
 import numpy as np
 import supervision as sv
 
-from monterrey_count.core.pipeline import Counter
+from monterrey_count.core.pipeline import Counter, run_videos
 
 AREA = [(0, 35), (100, 35), (100, 85), (0, 85)]  # se cuenta el centro de la caja (pies - 15)
 
@@ -51,4 +55,24 @@ assert counter.count == 2, counter.count
 counter = Counter(AREA)
 feed(counter, [[(50, 95)]] * 5)
 assert counter.count == 1, counter.count
+
+# (g) lectura en paralelo: stride, cuadros avanzados y cerrar a mitad sin hilos colgados
+class Empty:
+    detect = staticmethod(lambda frame: sv.Detections.empty())
+
+
+video = Path(__file__).resolve().parents[1] / "data" / "sample_folder" / "segment_00.mp4"
+total = int(cv2.VideoCapture(str(video)).get(cv2.CAP_PROP_FRAME_COUNT))
+for stride in (1, 3):
+    advanced = [item[4] for item in run_videos([video], AREA, detector=Empty(), stride=stride)]
+    assert advanced[0] == stride and abs(sum(advanced) - total) <= stride, (stride, sum(advanced), total)
+threads = threading.active_count()
+items = run_videos([video], AREA, detector=Empty(), stride=1)
+for _ in range(20):
+    next(items)
+items.close()
+assert threading.active_count() == threads, threading.enumerate()
+missing = []
+assert list(run_videos([video.with_name("no_existe.mp4"), video], AREA, detector=Empty(), on_skip=missing.append, stride=30))
+assert len(missing) == 1 and threading.active_count() == threads
 print("ok")

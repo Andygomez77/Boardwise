@@ -3,6 +3,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QEventLoop, Qt, QTimer
@@ -142,11 +143,13 @@ click((points[0][0] + 5, points[0][1] + 5))
 assert view.closed and len(view.polygon) == 3, view.polygon
 assert all(close_to(a, b) for a, b in zip(view.polygon, points[:3])), view.polygon  # solo los puntos nuevos
 
-# Cerrar la ventana en pausa no se cuelga
+# Cerrar la ventana en pausa no se cuelga ni deja hilos de lectura colgados
+threads = threading.active_count()
 win.start()
 worker = win.worker
 wait_for(worker.frame)
 win.pause_button.click()
 win.close()
 assert worker.isFinished()
+assert threading.active_count() == threads, threading.enumerate()
 print("ok")
