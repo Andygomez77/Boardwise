@@ -5,6 +5,8 @@
 
 [Setup]
 AppName=Boardwise
+; Fijo para siempre: si cambia, un cambio de nombre visible crearía otra instalación.
+AppId=Boardwise
 AppVersion={#AppVersion}
 ; Ruta del usuario y sin admin: el actualizador reemplaza {app} sin permisos elevados.
 PrivilegesRequired=lowest
