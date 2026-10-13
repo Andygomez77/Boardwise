@@ -7,6 +7,6 @@ VERSION
 graphify-out/
 data/
 .handoff/
-MonterreyCount-Setup.exe
+Boardwise-Setup.exe
 *.dmg
 docs/

@@ -4,8 +4,8 @@ import urllib.error
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox, QProgressDialog
 
-from monterrey_count import updater
-from monterrey_count.ui.main_window import TITLE, MainWindow
+from boardwise import updater
+from boardwise.ui.main_window import TITLE, MainWindow
 
 
 def update_if_available(app) -> bool:

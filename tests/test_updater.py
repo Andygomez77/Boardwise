@@ -3,7 +3,7 @@ import io
 import json
 from unittest import mock
 
-from monterrey_count import updater
+from boardwise import updater
 
 
 def release(tag, asset=updater.ASSET):

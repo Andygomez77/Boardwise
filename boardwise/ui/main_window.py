@@ -6,11 +6,11 @@ from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from monterrey_count import updater
-from monterrey_count.core.pipeline import VIDEO_EXTENSIONS, list_videos
-from monterrey_count.ui.worker import Worker, to_qimage
+from boardwise import updater
+from boardwise.core.pipeline import VIDEO_EXTENSIONS, list_videos
+from boardwise.ui.worker import Worker, to_qimage
 
-TITLE = "Monterrey Count"
+TITLE = "Boardwise"
 BIG = "font-size: 28px; font-weight: bold"
 PANEL_WIDTH = 260
 CLOSE_PX = 10  # distancia en pantalla al primer vértice para cerrar el área

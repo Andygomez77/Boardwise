@@ -12,9 +12,9 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from PySide6.QtGui import QPixmap
 
-from monterrey_count.core.pipeline import run
-from monterrey_count.ui.main_window import MainWindow, first_frame
-from monterrey_count.ui.worker import to_qimage
+from boardwise.core.pipeline import run
+from boardwise.ui.main_window import MainWindow, first_frame
+from boardwise.ui.worker import to_qimage
 
 errors = []
 QMessageBox.critical = staticmethod(lambda parent, title, message: errors.append(message))

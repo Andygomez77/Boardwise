@@ -6,10 +6,10 @@ from pathlib import Path
 
 def data_dir() -> Path:
     if sys.platform == "darwin":
-        d = Path.home() / "Library" / "Application Support" / "MonterreyCount"
+        d = Path.home() / "Library" / "Application Support" / "Boardwise"
     elif sys.platform == "win32":
-        d = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "MonterreyCount"
+        d = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "Boardwise"
     else:
-        d = Path.home() / ".monterrey_count"
+        d = Path.home() / ".boardwise"
     d.mkdir(parents=True, exist_ok=True)
     return d

@@ -12,9 +12,9 @@ from pathlib import Path
 
 import certifi
 
-from monterrey_count import paths
+from boardwise import paths
 
-REPO = "Andygomez77/monterrey-count"
+REPO = "Andygomez77/Boardwise"
 ASSET = "mac.zip" if sys.platform == "darwin" else "windows.zip"
 TOKEN_FILE = paths.data_dir() / "github_token"
 # certifi: el Python empaquetado no siempre encuentra los certificados del sistema
@@ -70,7 +70,7 @@ def install_dir() -> Path:
 def apply(asset_url, token, on_progress=lambda pct: None) -> None:
     """Descarga la versión nueva y lanza el script que la instala cuando esta app se cierre."""
     app = install_dir()
-    staging = app.parent / ".monterrey_update"  # mismo disco que la app: el move es un rename
+    staging = app.parent / ".boardwise_update"  # mismo disco que la app: el move es un rename
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir()
     zip_path = staging / ASSET
@@ -94,7 +94,7 @@ def apply(asset_url, token, on_progress=lambda pct: None) -> None:
 
     # Espera a que la app cierre, cambia vieja por nueva (si falla, restaura la vieja) y reabre.
     if sys.platform == "darwin":
-        script = Path(tempfile.gettempdir()) / "monterrey_update.sh"
+        script = Path(tempfile.gettempdir()) / "boardwise_update.sh"
         script.write_text(f"""#!/bin/sh
 while kill -0 {pid} 2>/dev/null; do sleep 0.5; done
 rm -rf "{old}"
@@ -104,7 +104,7 @@ open "{app}"
 """)
         subprocess.Popen(["/bin/sh", str(script)], start_new_session=True)
     else:
-        script = Path(tempfile.gettempdir()) / "monterrey_update.bat"
+        script = Path(tempfile.gettempdir()) / "boardwise_update.bat"
         # ping como sleep: timeout falla sin consola. "oem": la codepage con la que cmd lee el .bat
         script.write_text(f"""@echo off
 :wait

@@ -281,7 +281,7 @@ def main():
                 labels = [str(track_id) for track_id in detections.tracker_id] if detections.tracker_id is not None else None
                 frame = sv.LabelAnnotator().annotate(frame, detections, labels=labels)
                 cv2.polylines(frame, [np.array(polygon)], True, (0, 255, 0), 2)
-                cv2.imshow("Monterrey Count", frame)
+                cv2.imshow("Boardwise", frame)
                 if cv2.waitKey(1) == 27:
                     break
     except ValueError as error:

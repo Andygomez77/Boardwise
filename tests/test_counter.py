@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import supervision as sv
 
-from monterrey_count.core.pipeline import Counter, run_parallel, run_videos
+from boardwise.core.pipeline import Counter, run_parallel, run_videos
 
 AREA = [(0, 35), (100, 35), (100, 85), (0, 85)]  # se cuenta el centro de la caja (pies - 15)
 

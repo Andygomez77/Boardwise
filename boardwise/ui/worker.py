@@ -5,7 +5,7 @@ import cv2
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from monterrey_count.core.pipeline import PARALLEL_VIDEOS, run_parallel
+from boardwise.core.pipeline import PARALLEL_VIDEOS, run_parallel
 
 FRAME_INTERVAL = 1 / 15  # el proceso va a ~80 fps; la vista no necesita tanto
 
