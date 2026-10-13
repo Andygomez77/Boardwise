@@ -8,9 +8,10 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLis
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from boardwise import updater
+from boardwise.core.clock import read_clock
 from boardwise.core.pipeline import VIDEO_EXTENSIONS, list_videos
 from boardwise.core.timeline import Timeline, seek
-from boardwise.ui.timeline import DurationWorker, TimelineBar
+from boardwise.ui.timeline import DurationWorker, TimelineBar, clock_text
 from boardwise.ui.worker import Worker, to_qimage
 
 TITLE = "Boardwise"
@@ -21,6 +22,7 @@ SPEEDS = (1, 2, 4, 8, 16)
 TICK_MS = 33
 SCRUB_INTERVAL = 0.15  # segundos entre cuadros mientras se arrastra la barra
 LEAD = 2  # segundos antes de la subida a los que salta al hacer clic en su marca
+CLOCK_INTERVAL = 0.5  # segundos entre lecturas de la hora real al reproducir
 SEQUENTIAL_MAX = 1.0  # avances de hasta 1 s se leen cuadro a cuadro; más grandes saltan por tiempo
 CALCULATING = "Calculando duración…"
 SEEKING = "Buscando…"
@@ -139,6 +141,9 @@ class MainWindow(QMainWindow):
         self.timeline = None  # None mientras se calculan las duraciones
         self.dur_worker = None
         self.position = 0.0  # segundos desde el inicio de la carpeta
+        self.wall = None  # hora real impresa en el cuadro mostrado (None = sin reloj)
+        self.starts = {}  # nombre de archivo -> hora real de su primer cuadro
+        self._clock_at = 0.0
         self.playing = False
         self.speed = 1
         self.scrubbing = False
@@ -172,11 +177,12 @@ class MainWindow(QMainWindow):
         self.video_list = QListWidget()
         self.all_button = QPushButton("Todos")
         self.none_button = QPushButton("Ninguno")
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Archivo", "Subidas"])
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Archivo", "Subidas", "Inicio"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setMaximumHeight(180)
         self.count_label.setStyleSheet(BIG)
+        read_clock(None)  # carga las plantillas aquí, antes de que otros hilos lean el reloj
 
         top = QHBoxLayout()
         for widget in (self.folder_button, self.video_button, self.clear_button, self.path_label):
@@ -307,8 +313,9 @@ class MainWindow(QMainWindow):
         self._reset()
         self._stop_play()
         self.timeline, self.position, self.cap_path, self.cap_t = None, 0.0, None, -1e9
+        self.wall, self.starts = read_clock(frame), {}
         self.bar.set_timeline(None)
-        self.bar.set_position(0.0)
+        self.bar.set_position(0.0, self.wall)
         self.video_list.clear()
         for item_path in videos:
             item = QListWidgetItem(item_path.name)
@@ -319,23 +326,24 @@ class MainWindow(QMainWindow):
         self.view.set_frame(to_qimage(frame))
         self.view.set_default_area()
         self.dur_worker = worker = DurationWorker(videos, self)
-        worker.done.connect(lambda durations: self._durations_ready(worker, durations))
+        worker.done.connect(lambda durations, starts: self._durations_ready(worker, durations, starts))
         worker.finished.connect(worker.deleteLater)
         worker.start()
         self.statusBar().showMessage(CALCULATING)
         self._update_playback()
 
-    def _durations_ready(self, worker, durations):
+    def _durations_ready(self, worker, durations, starts):
         if worker is not self.dur_worker:  # llegó tarde: ya se abrió otra ruta
             return
         timeline = Timeline(worker.paths, durations)
+        self.starts = {path.name: start for path, start in zip(worker.paths, starts)}
         if self.statusBar().currentMessage() == CALCULATING:
             self.statusBar().clearMessage()
         if timeline.total <= 0:
             self.statusBar().showMessage("No se pudo calcular la duración")
             return
         self.timeline = timeline
-        self.bar.set_timeline(timeline)
+        self.bar.set_timeline(timeline, starts)
         self._update_playback()
 
     def _show(self, seconds, mode):
@@ -374,6 +382,9 @@ class MainWindow(QMainWindow):
             return None
         self.cap_t = real
         self.view.set_frame(to_qimage(frame))
+        now = time.monotonic()
+        if mode != "play" or now - self._clock_at >= CLOCK_INTERVAL:
+            self.wall, self._clock_at = read_clock(frame), now
         return self.timeline.to_global(path, real)
 
     def _scrub(self, seconds, mode="precise"):
@@ -381,7 +392,7 @@ class MainWindow(QMainWindow):
             return
         self.position = min(max(seconds, 0.0), self.timeline.total)
         if mode == "drag" and time.monotonic() - self._shown < SCRUB_INTERVAL:
-            return self.bar.set_position(self.position)
+            return self.bar.set_position(self.position, self.wall)
         self._shown = time.monotonic()
         if mode == "precise":
             self.statusBar().showMessage(SEEKING)
@@ -392,7 +403,7 @@ class MainWindow(QMainWindow):
         # la posición mostrada es la real: tras un hueco, el siguiente cuadro existente
         if real is not None and (mode == "precise" or (mode == "play" and abs(real - self.position) > 1)):
             self.position = real
-        self.bar.set_position(self.position)
+        self.bar.set_position(self.position, self.wall)
 
     def _on_seek(self, seconds, final):
         self.scrubbing = not final
@@ -520,6 +531,7 @@ class MainWindow(QMainWindow):
         for row, (name, count) in enumerate(rows):
             self.table.setItem(row, 0, QTableWidgetItem(name))
             self.table.setItem(row, 1, QTableWidgetItem("no se pudo abrir" if count is None else str(count)))
+            self.table.setItem(row, 2, QTableWidgetItem(clock_text(self.starts[name]) if self.starts.get(name) else ""))
             total += count or 0
         self.table.setItem(len(rows), 0, QTableWidgetItem("TOTAL"))
         self.table.setItem(len(rows), 1, QTableWidgetItem(str(total)))

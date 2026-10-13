@@ -5,6 +5,7 @@ import cv2
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+from boardwise.core.clock import read_clock
 from boardwise.core.pipeline import PARALLEL_VIDEOS, run_parallel
 
 FRAME_INTERVAL = 1 / 15  # el proceso va a ~80 fps; la vista no necesita tanto
@@ -19,7 +20,7 @@ def to_qimage(frame):
 class Worker(QThread):
     frame = Signal(QImage)
     counts = Signal(int)
-    mark = Signal(object, float)  # (video, segundo en el video) de cada subida contada
+    mark = Signal(object, float, object)  # (video, segundo en el video, hora real o None) de cada subida contada
     file_started = Signal(int)  # posición en la lista
     file_finished = Signal(int)
     file_skipped = Signal(str)
@@ -96,8 +97,10 @@ class Worker(QThread):
             try:
                 for path, frame, detections, count, advanced, seconds, new_ids in items:
                     final[path] = count
-                    for _ in new_ids:
-                        self.mark.emit(path, seconds)
+                    if new_ids:
+                        wall = read_clock(frame)  # el cuadro aún está limpio (se anota más abajo)
+                        for _ in new_ids:
+                            self.mark.emit(path, seconds, wall)
                     frames += advanced  # fps = cuadros de VIDEO por segundo (todos los hilos, incluye los saltados)
                     now = time.perf_counter()
                     if now - last >= FRAME_INTERVAL:
