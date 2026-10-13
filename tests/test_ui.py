@@ -16,7 +16,7 @@ from PySide6.QtGui import QPixmap
 
 import boardwise.ui.worker as worker_module
 from boardwise.ui import style
-from boardwise.core.pipeline import run
+from boardwise.core.pipeline import PARALLEL_VIDEOS, run_videos
 from boardwise.ui.main_window import MainWindow, first_frame
 from boardwise.ui.worker import to_qimage
 
@@ -139,11 +139,15 @@ x = win.bar.x_of(timeline.offsets[1])
 assert win.bar._mark_near(x) or win.bar.tooltip_at(x) == "segment_01 · 06/10/2026 01:59:29 PM", win.bar.tooltip_at(x)
 win.bar.starts[1] = None
 
-# Cada fila (modo paralelo) == el video procesado solo con un Counter nuevo
-for row in range(3):
-    path = Path(__file__).resolve().parents[1] / "data" / "sample_folder" / table.item(row, 0).text()
-    alone = list(run(path, win.view.polygon))[-1][2]
-    assert int(table.item(row, 1).text()) == alone, (path.name, table.item(row, 1).text(), alone)
+# Cada fila == lo que sumó ese video con un solo Counter compartido entre archivos (PARALLEL_VIDEOS = 1)
+assert PARALLEL_VIDEOS == 1
+paths = [Path(__file__).resolve().parents[1] / "data" / "sample_folder" / table.item(row, 0).text() for row in range(3)]
+final = {}
+for path, _, _, count, *_ in run_videos(paths, win.view.polygon):
+    final[path] = count
+for row, path in enumerate(paths):
+    expected = final[path] - (final[paths[row - 1]] if row else 0)
+    assert int(table.item(row, 1).text()) == expected, (path.name, table.item(row, 1).text(), expected)
 assert total == sum(int(table.item(row, 1).text()) for row in range(3))
 
 # Solo 2 de los 3 videos marcados: la tabla tiene exactamente esas 2 filas + TOTAL

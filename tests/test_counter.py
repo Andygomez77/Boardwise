@@ -91,4 +91,11 @@ for path, _, _, count, *_ in run_parallel(videos, AREA, workers=2, on_start=lamb
 alone = {path: list(run_videos([path], AREA))[-1][3] for path in videos}
 assert last == alone and sorted(started) == sorted(done) == videos, (last, alone)
 assert threading.active_count() == threads
+# (i) workers=1: un solo Counter entre archivos; por video se reporta lo suyo y la suma es el total compartido
+last = {}
+for path, _, _, count, *_ in run_parallel(videos, AREA, workers=1):
+    last[path] = count
+shared = list(run_videos(videos, AREA))[-1][3]
+assert sum(last.values()) == shared, (last, shared)
+assert threading.active_count() == threads
 print("ok")
