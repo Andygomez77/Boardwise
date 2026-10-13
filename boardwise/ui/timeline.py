@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QToolTip, QWidget
 
 from boardwise.core.clock import read_clock
 from boardwise.core.timeline import durations as cached_durations
-from boardwise.ui.style import ACCENT, BG, BORDER, MUTED, SUCCESS, TEXT
+from boardwise.ui.style import C
 
 PAD = 8
 NEAR_PX = 5  # distancia al clic para tomarlo como clic en una marca
@@ -119,26 +119,26 @@ class TimelineBar(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         # reloj en texto normal; archivo y posición en tenue
         head = clock_text(self.wall) + " · " if self.wall else ""
-        painter.setPen(QColor(TEXT))
+        painter.setPen(QColor(C["TEXT"]))
         painter.drawText(PAD, 16, head)
-        painter.setPen(QColor(MUTED))
+        painter.setPen(QColor(C["MUTED"]))
         painter.drawText(PAD + painter.fontMetrics().horizontalAdvance(head), 16, self.label()[len(head):])
         track = QRectF(PAD, 30, self.width() - 2 * PAD, 6)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(BORDER))
+        painter.setBrush(QColor(C["BORDER"]))
         painter.drawRoundedRect(track, 3, 3)
         x = self.x_of(self.position)
-        painter.setBrush(QColor(ACCENT))
+        painter.setBrush(QColor(C["PROGRESS"]))
         painter.drawRoundedRect(QRectF(PAD, 30, x - PAD, 6), 3, 3)
-        painter.setPen(QPen(QColor(MUTED), 1))
+        painter.setPen(QPen(QColor(C["MUTED"]), 1))
         for offset in self.timeline.offsets[1:]:
             separator = int(self.x_of(offset))
             painter.drawLine(separator, 27, separator, 39)
-        painter.setPen(QPen(QColor(SUCCESS), 2))
+        painter.setPen(QPen(QColor(C["ACCENT"]), 2))
         for t, *_ in self.sorted_marks():
             mark = int(self.x_of(t))
             painter.drawLine(mark, 22, mark, 44)
-        painter.setPen(QPen(QColor(BG), 2))
+        painter.setPen(QPen(QColor(C["KNOB_EDGE"]), 2))
         painter.setBrush(QColor("white"))
         painter.drawEllipse(QRectF(x - 7, 26, 14, 14))
 

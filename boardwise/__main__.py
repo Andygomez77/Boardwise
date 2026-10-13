@@ -2,7 +2,8 @@ import sys
 import urllib.error
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox, QProgressDialog
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from boardwise import updater
 from boardwise.ui import style
@@ -13,16 +14,8 @@ def update_if_available(app) -> bool:
     """True si quedó lanzada una actualización y la app debe cerrarse."""
     if not getattr(sys, "frozen", False) or updater.current_version() == 0:
         return False  # sin build que actualizar: código local o compilación local sin VERSION (no viene de un release)
-    token = updater.load_token()
-    if not token:
-        token, ok = QInputDialog.getText(None, TITLE, "Token de GitHub (solo lectura) para recibir actualizaciones:",
-                                         QLineEdit.EchoMode.Password)
-        token = token.strip()
-        if not ok or not token:
-            return False
-        updater.save_token(token)
     try:
-        found = updater.check(token)
+        found = updater.check()
         if not found:
             return False
         version, url = found
@@ -38,14 +31,10 @@ def update_if_available(app) -> bool:
             progress.setValue(pct)
             app.processEvents()
 
-        updater.apply(url, token, on_progress)
+        updater.apply(url, on_progress)
         return True
     except urllib.error.HTTPError as e:
-        if e.code == 401:
-            updater.forget_token()
-            QMessageBox.warning(None, TITLE, "El token de GitHub no es válido; se pedirá de nuevo al abrir la app.")
-        else:
-            QMessageBox.warning(None, TITLE, f"No se pudo buscar actualizaciones (HTTP {e.code}).")
+        QMessageBox.warning(None, TITLE, f"No se pudo buscar actualizaciones (HTTP {e.code}).")
     except urllib.error.URLError:
         pass  # sin internet: se abre la versión actual
     except Exception as e:
@@ -56,6 +45,7 @@ def update_if_available(app) -> bool:
 def main():
     app = QApplication(sys.argv)
     style.apply(app)
+    app.setWindowIcon(QIcon(style.asset("icon.png")))
     if update_if_available(app):
         return
     win = MainWindow()

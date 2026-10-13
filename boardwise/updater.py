@@ -1,4 +1,4 @@
-"""Auto-actualización desde los GitHub Releases de un repo privado."""
+"""Auto-actualización desde los GitHub Releases del repo (público: sin token)."""
 import json
 import os
 import shutil
@@ -12,11 +12,9 @@ from pathlib import Path
 
 import certifi
 
-from boardwise import paths
 
 REPO = "Andygomez77/Boardwise"
 ASSET = "mac.zip" if sys.platform == "darwin" else "windows.zip"
-TOKEN_FILE = paths.data_dir() / "github_token"
 # certifi: el Python empaquetado no siempre encuentra los certificados del sistema
 _SSL = ssl.create_default_context(cafile=certifi.where())
 
@@ -28,32 +26,14 @@ def current_version() -> int:
         return 0
 
 
-def load_token() -> str | None:
-    try:
-        return TOKEN_FILE.read_text().strip() or None
-    except OSError:
-        return None
-
-
-def save_token(token: str) -> None:
-    TOKEN_FILE.write_text(token)
-    TOKEN_FILE.chmod(0o600)
-
-
-def forget_token() -> None:
-    TOKEN_FILE.unlink(missing_ok=True)
-
-
-def _open(url, token, accept="application/vnd.github+json", timeout=10):
+def _open(url, accept="application/vnd.github+json", timeout=10):
     req = urllib.request.Request(url, headers={"Accept": accept})
-    # unredirected: el token no viaja al CDN al que GitHub redirige la descarga
-    req.add_unredirected_header("Authorization", f"Bearer {token}")
     return urllib.request.urlopen(req, context=_SSL, timeout=timeout)
 
 
-def check(token):
+def check():
     """(versión, url del asset) si hay una versión más nueva; si no, None."""
-    with _open(f"https://api.github.com/repos/{REPO}/releases/latest", token) as r:
+    with _open(f"https://api.github.com/repos/{REPO}/releases/latest") as r:
         release = json.load(r)
     latest = int(release["tag_name"].lstrip("v"))
     asset = next((a for a in release["assets"] if a["name"] == ASSET), None)
@@ -67,14 +47,14 @@ def install_dir() -> Path:
     return exe.parents[2] if sys.platform == "darwin" else exe.parent  # el .app / la carpeta del .exe
 
 
-def apply(asset_url, token, on_progress=lambda pct: None) -> None:
+def apply(asset_url, on_progress=lambda pct: None) -> None:
     """Descarga la versión nueva y lanza el script que la instala cuando esta app se cierre."""
     app = install_dir()
     staging = app.parent / ".boardwise_update"  # mismo disco que la app: el move es un rename
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir()
     zip_path = staging / ASSET
-    with _open(asset_url, token, accept="application/octet-stream", timeout=60) as r, open(zip_path, "wb") as f:
+    with _open(asset_url, accept="application/octet-stream", timeout=60) as r, open(zip_path, "wb") as f:
         total, done = int(r.headers.get("Content-Length") or 0), 0
         while chunk := r.read(1 << 20):
             f.write(chunk)

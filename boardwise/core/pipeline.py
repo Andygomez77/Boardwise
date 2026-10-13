@@ -18,7 +18,7 @@ from .detector import Detector
 VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov")
 MIN_FRAMES_INSIDE = 3
 ANALYZE_FPS = 8  # cuadros analizados por segundo de video
-PARALLEL_VIDEOS = 2  # videos a la vez; 2-4 rinden igual (~390 fps vs ~245 con 1): la GPU (DirectML) se serializa
+PARALLEL_VIDEOS = 1  # 1 = el mismo tracker sigue entre archivos (sin dobles en los cortes); 2 rinde ~30% más
 
 
 def list_videos(folder):
@@ -159,16 +159,18 @@ def run_folder(folder, polygon, model_path=None, detector=None, on_skip=None, st
 
 def run_parallel(paths, polygon, workers=PARALLEL_VIDEOS, model_path=None, on_skip=None, on_start=None, on_done=None, stride=None):
     """Varios videos a la vez: un hilo por video en curso, cada uno con su Counter y su Detector (sesión propia).
+    Con workers=1 todos comparten un Counter: quien cruza el corte entre dos archivos sigue con el mismo ID.
 
     Hace yield de (video_path, frame, detections, count_de_ese_video, advanced, segundo_en_el_archivo, ids_contados_ahora).
     on_start(path, counter, detector) y on_done(path) se llaman desde los hilos; un video que no abre solo llama a on_skip.
     """
-    # ponytail: cada video tiene su propio tracker; quien sube justo en el corte entre dos archivos puede contarse doble o perderse (run_videos comparte el Counter).
+    # ponytail: con workers>1 cada video tiene su propio tracker; quien sube justo en el corte entre dos archivos puede contarse doble o perderse.
     pending = queue.Queue()
     for path in paths:
         pending.put(path)
     results = queue.Queue(maxsize=8)  # llena (consumidor en pausa) = todos los hilos esperan
     stop = threading.Event()
+    shared = Counter(polygon) if workers == 1 else None
     detectors = []  # se sueltan al final, ya sin hilos: destruir una sesión DirectML mientras otro hilo infiere también tumba el proceso
 
     def put(item):
@@ -193,7 +195,8 @@ def run_parallel(paths, polygon, workers=PARALLEL_VIDEOS, model_path=None, on_sk
                     detectors.append(detector)
                     if detector.provider == "DmlExecutionProvider":
                         detector.session = _Serial(detector.session)
-                counter = Counter(polygon)
+                counter = shared or Counter(polygon)
+                base = counter.count  # el conteo que se reporta es solo el de este video
                 items = _frames([path], counter, detector, skip_bad=True, on_skip=on_skip, stride=stride)
                 started = False
                 try:
@@ -204,7 +207,7 @@ def run_parallel(paths, polygon, workers=PARALLEL_VIDEOS, model_path=None, on_sk
                             started = True
                             if on_start:
                                 on_start(path, counter, detector)
-                        put(item)
+                        put(item[:3] + (item[3] - base,) + item[4:])
                     else:
                         if started and on_done:
                             on_done(path)

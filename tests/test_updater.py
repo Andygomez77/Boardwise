@@ -13,11 +13,11 @@ def release(tag, asset=updater.ASSET):
 
 with mock.patch.object(updater, "current_version", return_value=5):
     with release("v6"):
-        assert updater.check("t") == (6, "https://api/asset/1")
+        assert updater.check() == (6, "https://api/asset/1")
     with release("v5"):
-        assert updater.check("t") is None
+        assert updater.check() is None
     with release("v4"):
-        assert updater.check("t") is None
+        assert updater.check() is None
     with release("v6", asset="otro.zip"):
-        assert updater.check("t") is None  # release sin el zip de esta plataforma
+        assert updater.check() is None  # release sin el zip de esta plataforma
 print("ok")
