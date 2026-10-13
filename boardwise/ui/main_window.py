@@ -457,7 +457,7 @@ class MainWindow(QMainWindow):
         worker.done.connect(lambda durations, starts: self._durations_ready(worker, durations, starts))
         worker.finished.connect(worker.deleteLater)
         worker.start()
-        self.statusBar().showMessage(CALCULATING)
+        self.bar.message = CALCULATING
         self._update_playback()
 
     def _durations_ready(self, worker, durations, starts):
@@ -465,11 +465,9 @@ class MainWindow(QMainWindow):
             return
         timeline = Timeline(worker.paths, durations)
         self.starts = {path.name: start for path, start in zip(worker.paths, starts)}
-        if self.statusBar().currentMessage() == CALCULATING:
-            self.statusBar().clearMessage()
         if timeline.total <= 0:
-            self.statusBar().showMessage("No se pudo calcular la duración")
-            return
+            self.bar.message = "No se pudo calcular la duración"
+            return self.bar.update()
         self.timeline = timeline
         self.bar.set_timeline(timeline, starts)
         self._update_playback()

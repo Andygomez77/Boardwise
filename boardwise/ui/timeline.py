@@ -59,6 +59,7 @@ class TimelineBar(QWidget):
         self.setFixedHeight(52)
         self.setMouseTracking(True)
         self.timeline = None
+        self.message = ""  # se muestra en lugar de la barra mientras no hay línea de tiempo
         self.starts = []  # hora real de inicio de cada archivo (None = sin reloj)
         self.position = 0.0
         self.wall = None  # hora real del cuadro mostrado
@@ -114,6 +115,10 @@ class TimelineBar(QWidget):
 
     def paintEvent(self, event):
         if not self.timeline:
+            if self.message:  # en la barra y no en la de estado, que la tapan el modelo y los fps
+                painter = QPainter(self)
+                painter.setPen(QColor(C["MUTED"]))
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message)
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
