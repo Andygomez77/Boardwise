@@ -128,6 +128,14 @@ last = win.bar.sorted_marks()[-1]
 assert last[0] > 2
 QTest.mouseClick(win.bar, Qt.MouseButton.LeftButton, pos=QPoint(round(win.bar.x_of(last[0])) - 2, 30))
 assert abs(win.position - (last[0] - 2)) < 0.2, (win.position, last)
+# Arrastrar la barra (sin análisis) sigue funcionando y no entra en revisión
+mid = timeline.total / 2
+x = round(win.bar.x_of(mid))
+QTest.mousePress(win.bar, Qt.MouseButton.LeftButton, pos=QPoint(x, 30))
+QTest.mouseMove(win.bar, QPoint(x + 10, 30))
+QTest.mouseRelease(win.bar, Qt.MouseButton.LeftButton, pos=QPoint(x + 10, 30))
+assert abs(win.position - mid) < timeline.total * 0.1 and not win.reviewing, (win.position, mid)
+assert win.position != last[0] - 2 and not win.review_button.isVisible()
 print("primera subida:", round(first[0], 1), "s en", first[2].name)
 worker_module.read_clock = real_read_clock
 assert all(mark[2] == FAKE for mark in win.bar.marks)
@@ -139,6 +147,29 @@ x = win.bar.x_of(timeline.offsets[1])
 assert win.bar._mark_near(x) or win.bar.tooltip_at(x) == "segment_01 · 06/10/2026 01:59:29 PM", win.bar.tooltip_at(x)
 win.bar.starts[1] = None
 
+# Ajuste manual: +1/−1 cambian el número, la fila "Ajuste manual" y el TOTAL se actualizan en el momento
+assert win.adjust == 0 and table.rowCount() == 4
+win.plus_button.click()
+assert win.count_label.text() == str(total + 1) and table.rowCount() == 5
+assert table.item(3, 0).text() == "Ajuste manual" and table.item(3, 1).text() == "+1"
+assert table.item(4, 0).text() == "TOTAL" and table.item(4, 1).text() == str(total + 1)
+win.minus_button.click()
+win.minus_button.click()
+assert win.count_label.text() == str(total - 1) and table.item(3, 1).text() == "−1" and table.item(4, 1).text() == str(total - 1)
+win.plus_button.click()  # vuelve a 0: la fila desaparece
+assert win.count_label.text() == str(total) and table.rowCount() == 4 and table.item(3, 0).text() == "TOTAL"
+win.show_counts(0)  # el total mostrado nunca baja de 0
+win.adjust = 0
+win._show_count()
+assert not win.minus_button.isEnabled()
+win.minus_button.click()
+assert win.count_label.text() == "0" and win.adjust == 0
+win.plus_button.click()
+assert win.count_label.text() == "1" and win.minus_button.isEnabled()
+win.show_counts(total)
+win.adjust = 0
+win._show_count()
+
 # Cada fila == lo que sumó ese video con un solo Counter compartido entre archivos (PARALLEL_VIDEOS = 1)
 assert PARALLEL_VIDEOS == 1
 paths = [Path(__file__).resolve().parents[1] / "data" / "sample_folder" / table.item(row, 0).text() for row in range(3)]
@@ -149,6 +180,9 @@ for row, path in enumerate(paths):
     expected = final[path] - (final[paths[row - 1]] if row else 0)
     assert int(table.item(row, 1).text()) == expected, (path.name, table.item(row, 1).text(), expected)
 assert total == sum(int(table.item(row, 1).text()) for row in range(3))
+win.plus_button.click()
+win._reset()  # abrir otra ruta o Iniciar pone el ajuste en 0
+assert win.adjust == 0 and win.count_label.text() == "0" and not win.minus_button.isEnabled() and table.rowCount() == 0
 
 # Solo 2 de los 3 videos marcados: la tabla tiene exactamente esas 2 filas + TOTAL
 assert win.video_list.count() == 3 and len(win._checked()) == 3
@@ -167,11 +201,32 @@ win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
 
 # Pausar a mitad: no llegan cuadros ni conteos en pausa; al reanudar termina con el mismo total
 win.start()
-assert not win.bar.isEnabled() and not win.play_button.isEnabled() and win.bar.marks == []
+assert win.bar.isEnabled() and win.play_button.isEnabled() and win.speed_box.isEnabled() and win.bar.marks == []
+assert win.adjust == 0 and not win.reviewing and not win.review_button.isVisible()
 seen = []
 win.worker.frame.connect(lambda _: seen.append("frame"))
 win.worker.counts.connect(lambda _: seen.append("count"))
 wait_for(win.worker.frame)
+
+# Revisión durante el análisis: arrastrar la barra deja de pintar los cuadros del worker; "Ver análisis" los devuelve
+win.bar.seek.emit(timeline.total / 2, False)
+win.bar.seek.emit(timeline.total / 2, True)
+assert win.reviewing and win.review_button.isVisible() and abs(win.position - timeline.total / 2) < 1
+shown = win.view.pix.cacheKey()
+win.plus_button.click()  # el ajuste también funciona durante el análisis
+assert win.adjust == 1 and win.count_label.text() == str(win._total())
+win.minus_button.click()
+for _ in range(2):
+    wait_for(win.worker.frame)
+assert win.view.pix.cacheKey() == shown
+win.review_button.click()
+assert not win.reviewing and not win.review_button.isVisible()
+wait_for(win.worker.frame)
+assert win.view.pix.cacheKey() != shown
+win.play_button.click()  # Reproducir durante el análisis también entra en revisión
+assert win.reviewing and win.playing
+win.review_button.click()
+assert not win.playing and not win.reviewing
 win.pause_button.click()
 assert win.pause_button.text() == "Reanudar"
 QTest.qWait(300)  # deja pasar lo que ya venía en camino
@@ -206,9 +261,12 @@ worker = win.worker
 wait_for(worker.frame)
 win.pause_button.click()
 QTest.qWait(300)
+win._scrub(1.0)
+assert win.reviewing
 win.stop_button.click()
 assert worker.wait(5000)
 app.processEvents()
+assert not win.reviewing and not win.review_button.isVisible() and win.bar.isEnabled()
 assert win.start_button.isEnabled() and not win.pause_button.isEnabled()
 
 # Dibujar un área con clics: coordenadas en píxeles del video

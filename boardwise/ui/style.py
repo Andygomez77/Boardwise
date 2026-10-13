@@ -38,6 +38,7 @@ QPushButton { background: $SURFACE2; color: $TEXT; border: 1px solid $BORDER; bo
 QPushButton:hover { background: $HOVER; border-color: $HOVER_BORDER; }
 QPushButton:pressed { background: $PRESSED; }
 QPushButton:disabled { background: $SURFACE; color: $OFF; border-color: $BORDER; }
+QPushButton#adjust { min-width: 38px; max-width: 38px; padding: 7px 0; font-weight: bold; border-radius: 10px; }
 QPushButton#primary { background: $ACCENT; border-color: $ACCENT; color: $ON_ACCENT; font-weight: bold; padding: 10px 14px; }
 QPushButton#primary:hover { background: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
 QPushButton#primary:pressed { background: $ACCENT_PRESSED; border-color: $ACCENT_PRESSED; }

@@ -193,6 +193,12 @@ class MainWindow(QMainWindow):
         self.running = set()  # posiciones (en run_items) de los videos en curso
         self.finished = 0
         self.timeline = None  # None mientras se calculan las duraciones
+        self.auto = 0  # conteo automático del worker
+        self.adjust = 0  # corrección manual, se suma al automático
+        self.rows = []  # filas de la última tabla, para recalcular con el ajuste
+        self.analyzing = False
+        self.last_image = None  # último cuadro del worker
+        self.reviewing = False  # revisando la grabación mientras el análisis sigue: la vista ignora los cuadros del worker
         self.dur_worker = None
         self.position = 0.0  # segundos desde el inicio de la carpeta
         self.wall = None  # hora real impresa en el cuadro mostrado (None = sin reloj)
@@ -231,6 +237,12 @@ class MainWindow(QMainWindow):
         self.stop_button = QPushButton("Detener")
         self.clear_button = QPushButton("Borrar área")
         self.count_label = label("0", "count")
+        self.minus_button = QPushButton("−1")
+        self.plus_button = QPushButton("+1")
+        for button, tip in ((self.minus_button, "Restar una subida"), (self.plus_button, "Sumar una subida")):
+            button.setObjectName("adjust")
+            button.setToolTip(tip)
+        self.review_button = QPushButton("Ver análisis")
         self.file_label = label("", "muted")
         self.file_label.setWordWrap(True)
         self.video_list = QListWidget()
@@ -284,7 +296,11 @@ class MainWindow(QMainWindow):
 
         count_box = QVBoxLayout()
         count_box.addWidget(label("SUBIDAS", "caption"), 0, Qt.AlignmentFlag.AlignHCenter)
-        count_box.addWidget(self.count_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        count_row = QHBoxLayout()
+        count_row.addWidget(self.minus_button)
+        count_row.addWidget(self.count_label, 1, Qt.AlignmentFlag.AlignHCenter)
+        count_row.addWidget(self.plus_button)
+        count_box.addLayout(count_row)
         count_box.addWidget(self.file_label, 0, Qt.AlignmentFlag.AlignHCenter)
         run = QHBoxLayout()
         run.addWidget(self.pause_button)
@@ -296,6 +312,7 @@ class MainWindow(QMainWindow):
         panel.addWidget(card(count_box))
         panel.addWidget(self.start_button)
         panel.addLayout(run)
+        panel.addWidget(self.review_button)
         panel.addWidget(self.clear_button)
         panel.addSpacing(6)
         panel.addWidget(label("Videos", "section"))
@@ -322,6 +339,9 @@ class MainWindow(QMainWindow):
         self.start_button.clicked.connect(self.start)
         self.pause_button.clicked.connect(self.toggle_pause)
         self.stop_button.clicked.connect(self.stop)
+        self.minus_button.clicked.connect(lambda: self._adjust(-1))
+        self.plus_button.clicked.connect(lambda: self._adjust(1))
+        self.review_button.clicked.connect(self._back_to_analysis)
         self.video_list.itemClicked.connect(self.show_first_frame)
         self.bar.seek.connect(self._on_seek)
         self.bar.mark_clicked.connect(self._goto_mark)
@@ -373,7 +393,9 @@ class MainWindow(QMainWindow):
         button.setIcon(QIcon(pix))
 
     def _reset(self):
-        self.count_label.setText("0")
+        self.auto = self.adjust = 0
+        self.rows = []
+        self._show_count()
         self.file_label.clear()
         self.table.setRowCount(0)
         self.bar.clear_marks()
@@ -383,8 +405,11 @@ class MainWindow(QMainWindow):
             widget.setEnabled(not busy)
         self.stop_button.setEnabled(busy)
         self.pause_button.setEnabled(busy)
-        if busy:
-            self._stop_play()
+        self.analyzing = busy
+        self.last_image = None
+        self.reviewing = False
+        self.review_button.setVisible(False)
+        self._stop_play()
         self.pause_button.setText("Pausar")
         self.paused = False
         for widget in (self.all_button, self.none_button):
@@ -397,7 +422,7 @@ class MainWindow(QMainWindow):
         self._update_playback()
 
     def _update_playback(self):
-        enabled = self.timeline is not None and not self.stop_button.isEnabled()
+        enabled = self.timeline is not None
         for widget in (self.bar, self.back_min, self.back_10, self.play_button, self.fwd_10, self.fwd_min, self.speed_box):
             widget.setEnabled(enabled)
 
@@ -516,6 +541,7 @@ class MainWindow(QMainWindow):
     def _scrub(self, seconds, mode="precise"):
         if not self.timeline:
             return
+        self._review()
         self.position = min(max(seconds, 0.0), self.timeline.total)
         if mode == "drag" and time.monotonic() - self._shown < SCRUB_INTERVAL:
             return self.bar.set_position(self.position, self.wall)
@@ -544,11 +570,30 @@ class MainWindow(QMainWindow):
             return self._stop_play()
         if self.position >= self.timeline.total:
             self._scrub(0.0)
+        self._review()
         self.playing = True
         self._last_tick = time.monotonic()
         self.play_button.setText("Pausa")
         self._icon(self.play_button, SP.SP_MediaPause)
         self.tick.start()
+
+    def _review(self):
+        """Si el análisis sigue corriendo, la vista pasa a mostrar la grabación en vez de los cuadros del worker."""
+        if self.analyzing and not self.reviewing:
+            self.reviewing = True
+            self.review_button.setVisible(True)
+
+    def _back_to_analysis(self):
+        self._stop_play()
+        self.reviewing = False
+        self.review_button.setVisible(False)
+        if self.last_image:  # con el worker en pausa no llegaría otro cuadro
+            self.view.set_frame(self.last_image)
+
+    def _worker_frame(self, image):
+        self.last_image = image
+        if not self.reviewing:
+            self.view.set_frame(image)
 
     def _stop_play(self):
         self.playing = False
@@ -590,7 +635,7 @@ class MainWindow(QMainWindow):
         self._busy(True)
         self.cap_t = -1e9  # la vista va a mostrar otra cosa: la próxima lectura salta
         self.worker = worker = Worker(paths, self.view.polygon)
-        worker.frame.connect(self.view.set_frame)
+        worker.frame.connect(self._worker_frame)
         worker.mark.connect(self.bar.add_mark)
         worker.counts.connect(self.show_counts)
         worker.file_started.connect(self.file_started)
@@ -644,7 +689,23 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(provider)
 
     def show_counts(self, count):
-        self.count_label.setText(str(count))
+        self.auto = count
+        self._show_count()
+
+    def _total(self):
+        return max(self.auto + self.adjust, 0)
+
+    def _show_count(self):
+        self.count_label.setText(str(self._total()))
+        self.minus_button.setEnabled(self._total() > 0)
+
+    def _adjust(self, delta):
+        if delta < 0 and self._total() == 0:
+            return
+        self.adjust += delta
+        self._show_count()
+        if self.table.rowCount():
+            self._fill_table()
 
     def _finish(self):
         self.worker.wait()
@@ -654,20 +715,32 @@ class MainWindow(QMainWindow):
             self.show_first_frame(item)  # imagen limpia para volver a dibujar el área
 
     def show_table(self, rows):
-        self.table.setRowCount(len(rows) + 1)
+        self.rows = rows
+        self._fill_table()
+        self._finish()
+
+    def _fill_table(self):
+        rows = self.rows
+        extra = [("Ajuste manual", f"{'+' if self.adjust > 0 else '−'}{abs(self.adjust)}")] if self.adjust else []
+        self.table.setRowCount(len(rows) + len(extra) + 1)
         total = 0
         for row, (name, count) in enumerate(rows):
             self.table.setItem(row, 0, QTableWidgetItem(name))
             self.table.setItem(row, 1, QTableWidgetItem("no se pudo abrir" if count is None else str(count)))
             self.table.setItem(row, 2, QTableWidgetItem(clock_text(self.starts[name]) if self.starts.get(name) else ""))
             total += count or 0
-        self.table.setItem(len(rows), 0, QTableWidgetItem("TOTAL"))
-        self.table.setItem(len(rows), 1, QTableWidgetItem(str(total)))
+        for row, (name, text) in enumerate(extra, len(rows)):
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+            self.table.setItem(row, 1, QTableWidgetItem(text))
+            self.table.setItem(row, 2, QTableWidgetItem(""))
+        last = self.table.rowCount() - 1
+        self.table.setItem(last, 0, QTableWidgetItem("TOTAL"))
+        self.table.setItem(last, 1, QTableWidgetItem(str(max(total + self.adjust, 0))))
+        self.table.setItem(last, 2, QTableWidgetItem(""))
         bold = QFont(self.table.font())
         bold.setBold(True)
         for column in range(2):
-            self.table.item(len(rows), column).setFont(bold)
-        self._finish()
+            self.table.item(last, column).setFont(bold)
 
     def show_error(self, message):
         QMessageBox.critical(self, TITLE, message)
