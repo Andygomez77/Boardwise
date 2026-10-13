@@ -29,7 +29,7 @@ jobs:
       - run: pip install -r requirements.txt pyinstaller
       - run: echo "${{ github.run_number }}" > VERSION
         shell: bash
-      - run: pyinstaller --noconfirm --windowed --name Boardwise --paths . --add-data "VERSION:." --add-data "models:models" boardwise/__main__.py
+      - run: pyinstaller --noconfirm --windowed --name Boardwise --paths . --add-data "VERSION:." --add-data "models:models" --add-data "assets:assets" --icon assets/icon.png boardwise/__main__.py
       - if: runner.os == 'macOS'
         run: |
           ditto -c -k --keepParent dist/Boardwise.app mac.zip

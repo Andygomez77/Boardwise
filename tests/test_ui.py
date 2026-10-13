@@ -3,11 +3,12 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QPoint, QSettings, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -22,11 +23,23 @@ from boardwise.ui.worker import to_qimage
 errors = []
 QMessageBox.critical = staticmethod(lambda parent, title, message: errors.append(message))
 
+QSettings.setDefaultFormat(QSettings.Format.IniFormat)  # el modo guardado va a una carpeta de prueba, no al registro del usuario
+QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, tempfile.mkdtemp())
 app = QApplication([])
-style.apply(app)
+style.apply(app, "dark")
 win = MainWindow()
 ROOT = Path(__file__).resolve().parents[1]
 win.set_source(ROOT / "data" / "sample_folder")
+
+# Tema: alterna claro/oscuro dos veces sin errores, queda guardado y cambia los colores de pintado
+assert style.mode == "dark" and win.theme_button.text() == "Modo claro"
+win.theme_button.click()
+assert style.mode == "light" and style.C["BG"] == "#F6F4FC" and win.theme_button.text() == "Modo oscuro"
+assert QSettings("Boardwise", "Boardwise").value("theme") == "light" and style.initial_mode() == "light"
+assert win.logo.pixmap().height() > 0
+win.theme_button.click()
+assert style.mode == "dark" and QSettings("Boardwise", "Boardwise").value("theme") == "dark" and style.C["BG"] == "#120D24"
+assert style.initial_mode() == "dark" and Path(style.asset("icon.png")).exists()
 
 
 def wait_for(signal, ms=120_000):

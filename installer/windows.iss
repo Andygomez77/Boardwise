@@ -16,6 +16,7 @@ DisableProgramGroupPage=yes
 ; Fuera de {app}: el actualizador reemplaza {app} completo y borraría unins000.exe.
 UninstallFilesDir={localappdata}\Programs\Boardwise-uninstall
 UninstallDisplayIcon={app}\Boardwise.exe
+SetupIconFile=..\assets\boardwise.ico
 OutputDir=..
 OutputBaseFilename=Boardwise-Setup
 Compression=lzma2

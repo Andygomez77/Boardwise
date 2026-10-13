@@ -2,9 +2,9 @@ import time
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStyle,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -12,7 +12,8 @@ from boardwise import updater
 from boardwise.core.clock import read_clock
 from boardwise.core.pipeline import VIDEO_EXTENSIONS, list_videos
 from boardwise.core.timeline import Timeline, seek
-from boardwise.ui.style import BORDER, MUTED, OFF, RUNNING, SURFACE, TEXT
+from boardwise.ui import style
+from boardwise.ui.style import C
 from boardwise.ui.timeline import DurationWorker, TimelineBar, clock_text
 from boardwise.ui.worker import Worker, to_qimage
 
@@ -29,6 +30,7 @@ CLOCK_INTERVAL = 0.5  # segundos entre lecturas de la hora real al reproducir
 SEQUENTIAL_MAX = 1.0  # avances de hasta 1 s se leen cuadro a cuadro; más grandes saltan por tiempo
 CALCULATING = "Calculando duración…"
 SEEKING = "Buscando…"
+LOGO_HEIGHT = 28
 
 
 def first_frame(path):
@@ -59,7 +61,7 @@ class Combo(QComboBox):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(MUTED if self.isEnabled() else OFF), 1.6))
+        painter.setPen(QPen(QColor(C["MUTED"] if self.isEnabled() else C["OFF"]), 1.6))
         x, y = self.width() - 16, self.height() / 2
         painter.drawPolyline(QPolygonF([QPointF(x - 4, y - 2), QPointF(x, y + 2), QPointF(x + 4, y - 2)]))
 
@@ -158,9 +160,9 @@ class VideoView(QWidget):
         edge = QPainterPath()
         edge.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
         painter.setClipPath(edge)
-        painter.fillRect(self.rect(), QColor(SURFACE))
+        painter.fillRect(self.rect(), QColor(C["SURFACE"]))
         if not self.pix:
-            painter.setPen(QColor(MUTED))
+            painter.setPen(QColor(C["MUTED"]))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, EMPTY)
         else:
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -177,7 +179,7 @@ class VideoView(QWidget):
                     painter.drawEllipse(point, 4, 4)
         painter.setClipping(False)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QColor(BORDER))
+        painter.setPen(QColor(C["BORDER"]))
         painter.drawPath(edge)
 
 
@@ -203,6 +205,7 @@ class MainWindow(QMainWindow):
         self.cap_path = None
         self.cap_t = -1e9  # segundo (en el archivo) del último cuadro leído; -1e9 = hay que saltar
         self.cap_fps = 15
+        self.icons = {}  # botón -> icono estándar, para re-teñirlo al cambiar de tema
         self._last_tick = self._shown = 0.0
         self.tick = QTimer(self)
         self.tick.setInterval(TICK_MS)
@@ -210,6 +213,8 @@ class MainWindow(QMainWindow):
 
         self.folder_button = QPushButton("Abrir carpeta…")
         self.video_button = QPushButton("Abrir video…")
+        self.theme_button = QPushButton()
+        self.logo = QLabel()
         self.path_label = ElidedLabel("Elige una carpeta o un video")
         self.path_label.setObjectName("muted")
         self.view = VideoView()
@@ -253,11 +258,12 @@ class MainWindow(QMainWindow):
         read_clock(None)  # carga las plantillas aquí, antes de que otros hilos lean el reloj
 
         top = QHBoxLayout()
-        top.addWidget(label(TITLE, "title"))
+        top.addWidget(self.logo)
         top.addSpacing(8)
         top.addWidget(self.path_label, 1)
         top.addWidget(self.folder_button)
         top.addWidget(self.video_button)
+        top.addWidget(self.theme_button)
         hint = label("Haz clic en las esquinas del área; doble clic para cerrar", "hint")
         playback = QHBoxLayout()
         playback.addStretch(1)
@@ -310,6 +316,7 @@ class MainWindow(QMainWindow):
         main.setColumnStretch(0, 1)
         self.setCentralWidget(central)
 
+        self.theme_button.clicked.connect(self.toggle_theme)
         self.folder_button.clicked.connect(self.open_folder)
         self.video_button.clicked.connect(self.open_video)
         self.start_button.clicked.connect(self.start)
@@ -329,14 +336,39 @@ class MainWindow(QMainWindow):
         self.view.changed.connect(self._update_start)
         self._reset()
         self._busy(False)
+        self._themed()
         self.resize(1300, 800)
+
+    def toggle_theme(self):
+        mode = "light" if style.mode == "dark" else "dark"
+        QSettings("Boardwise", "Boardwise").setValue("theme", mode)
+        style.apply(QApplication.instance(), mode)
+        self._themed()
+
+    def _themed(self):
+        """Re-pinta lo que no sigue la hoja de estilo: logo, botón del tema, iconos, fila en proceso y vistas propias."""
+        dark = style.mode == "dark"
+        self.theme_button.setText("Modo claro" if dark else "Modo oscuro")
+        self.theme_button.setToolTip("Cambiar a tema claro" if dark else "Cambiar a tema oscuro")
+        ratio = self.devicePixelRatioF()
+        logo = QPixmap(style.asset("logo-sobre-oscuro.png" if dark else "logo-sobre-claro.png"))
+        logo = logo.scaledToHeight(round(LOGO_HEIGHT * ratio), Qt.TransformationMode.SmoothTransformation)
+        logo.setDevicePixelRatio(ratio)
+        self.logo.setPixmap(logo)
+        for button, icon in self.icons.items():
+            self._icon(button, icon)
+        if self.running:
+            self.show_progress()
+        for widget in (self.view, self.bar, self.speed_box):
+            widget.update()
 
     def _icon(self, button, icon):
         # los iconos estándar de Fusion son oscuros: se pintan con el color de texto
+        self.icons[button] = icon
         pix = self.style().standardIcon(icon).pixmap(16, 16)
         painter = QPainter(pix)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-        painter.fillRect(pix.rect(), QColor(TEXT))
+        painter.fillRect(pix.rect(), QColor(C["ON_ACCENT"] if button.objectName() == "primary" else C["TEXT"]))
         painter.end()
         button.setIcon(QIcon(pix))
 
@@ -590,7 +622,7 @@ class MainWindow(QMainWindow):
         for item in self._items():
             item.setBackground(QBrush())
         for index in self.running:
-            self.run_items[index].setBackground(QColor(RUNNING))
+            self.run_items[index].setBackground(QColor(C["RUNNING"]))
         if self.running:
             self.video_list.scrollToItem(self.run_items[min(self.running)])
 

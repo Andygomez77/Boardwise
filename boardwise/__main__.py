@@ -2,6 +2,7 @@ import sys
 import urllib.error
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from boardwise import updater
@@ -44,6 +45,7 @@ def update_if_available(app) -> bool:
 def main():
     app = QApplication(sys.argv)
     style.apply(app)
+    app.setWindowIcon(QIcon(style.asset("icon.png")))
     if update_if_available(app):
         return
     win = MainWindow()
