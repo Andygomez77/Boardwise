@@ -2,21 +2,24 @@ import time
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-                               QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+                               QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStyle,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from boardwise import updater
 from boardwise.core.clock import read_clock
 from boardwise.core.pipeline import VIDEO_EXTENSIONS, list_videos
 from boardwise.core.timeline import Timeline, seek
+from boardwise.ui.style import BORDER, MUTED, OFF, RUNNING, SURFACE, TEXT
 from boardwise.ui.timeline import DurationWorker, TimelineBar, clock_text
 from boardwise.ui.worker import Worker, to_qimage
 
 TITLE = "Boardwise"
-BIG = "font-size: 28px; font-weight: bold"
-PANEL_WIDTH = 260
+EMPTY = "Abre una carpeta o un video para empezar"
+PANEL_WIDTH = 300
+SP = QStyle.StandardPixmap
 CLOSE_PX = 10  # distancia en pantalla al primer vértice para cerrar el área
 SPEEDS = (1, 2, 4, 8, 16)
 TICK_MS = 33
@@ -33,6 +36,45 @@ def first_frame(path):
     ok, frame = capture.read()
     capture.release()
     return frame if ok else None
+
+
+class ElidedLabel(QLabel):
+    """Texto de una línea que se corta con … en el medio si no cabe."""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setPen(self.palette().windowText().color())
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignVCenter,
+                         self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideMiddle, self.width()))
+
+
+class Combo(QComboBox):
+    """QSS le quita la flecha a Fusion: se dibuja un chevron a mano."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(MUTED if self.isEnabled() else OFF), 1.6))
+        x, y = self.width() - 16, self.height() / 2
+        painter.drawPolyline(QPolygonF([QPointF(x - 4, y - 2), QPointF(x, y + 2), QPointF(x + 4, y - 2)]))
+
+
+def card(layout):
+    frame = QFrame()
+    frame.setObjectName("card")
+    frame.setLayout(layout)
+    return frame
+
+
+def label(text, name):
+    widget = QLabel(text)
+    widget.setObjectName(name)
+    return widget
 
 
 class VideoView(QWidget):
@@ -112,21 +154,31 @@ class VideoView(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), Qt.GlobalColor.black)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        edge = QPainterPath()
+        edge.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
+        painter.setClipPath(edge)
+        painter.fillRect(self.rect(), QColor(SURFACE))
         if not self.pix:
-            return
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawPixmap(self._rect(), self.pix)
-        points = [self._to_view(point) for point in self.polygon]
-        painter.setPen(QPen(QColor(0, 255, 0), 3))
-        if self.closed:
-            painter.setBrush(QColor(0, 255, 0, 70))
-            painter.drawPolygon(QPolygonF(points))
+            painter.setPen(QColor(MUTED))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, EMPTY)
         else:
-            painter.drawPolyline(QPolygonF(points + ([self._cursor] if self._cursor and points else [])))
-            painter.setBrush(QColor(0, 255, 0))
-            for point in points:
-                painter.drawEllipse(point, 4, 4)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(self._rect(), self.pix)
+            points = [self._to_view(point) for point in self.polygon]
+            painter.setPen(QPen(QColor(0, 255, 0), 3))
+            if self.closed:
+                painter.setBrush(QColor(0, 255, 0, 70))
+                painter.drawPolygon(QPolygonF(points))
+            else:
+                painter.drawPolyline(QPolygonF(points + ([self._cursor] if self._cursor and points else [])))
+                painter.setBrush(QColor(0, 255, 0))
+                for point in points:
+                    painter.drawEllipse(point, 4, 4)
+        painter.setClipping(False)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QColor(BORDER))
+        painter.drawPath(edge)
 
 
 class MainWindow(QMainWindow):
@@ -158,7 +210,8 @@ class MainWindow(QMainWindow):
 
         self.folder_button = QPushButton("Abrir carpeta…")
         self.video_button = QPushButton("Abrir video…")
-        self.path_label = QLabel("Elige una carpeta o un video")
+        self.path_label = ElidedLabel("Elige una carpeta o un video")
+        self.path_label.setObjectName("muted")
         self.view = VideoView()
         self.bar = TimelineBar()
         self.back_min = QPushButton("−1 min")
@@ -166,62 +219,95 @@ class MainWindow(QMainWindow):
         self.play_button = QPushButton("Reproducir")
         self.fwd_10 = QPushButton("+10 s")
         self.fwd_min = QPushButton("+1 min")
-        self.speed_box = QComboBox()
+        self.speed_box = Combo()
         self.speed_box.addItems([f"{speed}x" for speed in SPEEDS])
         self.start_button = QPushButton("Iniciar")
         self.pause_button = QPushButton("Pausar")
         self.stop_button = QPushButton("Detener")
         self.clear_button = QPushButton("Borrar área")
-        self.count_label = QLabel()
-        self.file_label = QLabel()
+        self.count_label = label("0", "count")
+        self.file_label = label("", "muted")
+        self.file_label.setWordWrap(True)
         self.video_list = QListWidget()
         self.all_button = QPushButton("Todos")
         self.none_button = QPushButton("Ninguno")
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Archivo", "Subidas", "Inicio"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setMaximumHeight(180)
-        self.count_label.setStyleSheet(BIG)
+        self.start_button.setObjectName("primary")
+        self.stop_button.setObjectName("danger")
+        for button, icon in ((self.folder_button, SP.SP_DirOpenIcon), (self.video_button, SP.SP_FileIcon),
+                             (self.back_min, SP.SP_MediaSkipBackward), (self.back_10, SP.SP_MediaSeekBackward),
+                             (self.fwd_10, SP.SP_MediaSeekForward), (self.fwd_min, SP.SP_MediaSkipForward),
+                             (self.start_button, SP.SP_MediaPlay), (self.pause_button, SP.SP_MediaPause),
+                             (self.stop_button, SP.SP_MediaStop), (self.play_button, SP.SP_MediaPlay), (self.clear_button, SP.SP_DialogResetButton)):
+            self._icon(button, icon)
         read_clock(None)  # carga las plantillas aquí, antes de que otros hilos lean el reloj
 
         top = QHBoxLayout()
-        for widget in (self.folder_button, self.video_button, self.clear_button, self.path_label):
-            top.addWidget(widget)
-        top.setStretch(3, 1)
-        controls = QHBoxLayout()
-        for widget in (self.start_button, self.pause_button, self.stop_button, self.count_label, self.file_label):
-            controls.addWidget(widget)
-        controls.setStretch(4, 1)
+        top.addWidget(label(TITLE, "title"))
+        top.addSpacing(8)
+        top.addWidget(self.path_label, 1)
+        top.addWidget(self.folder_button)
+        top.addWidget(self.video_button)
+        hint = label("Haz clic en las esquinas del área; doble clic para cerrar", "hint")
         playback = QHBoxLayout()
+        playback.addStretch(1)
         for widget in (self.back_min, self.back_10, self.play_button, self.fwd_10, self.fwd_min, self.speed_box):
             playback.addWidget(widget)
         playback.addStretch(1)
+        timeline_box = QVBoxLayout()
+        timeline_box.addWidget(self.bar)
+        timeline_box.addLayout(playback)
         layout = QVBoxLayout()
-        layout.addLayout(top)
-        layout.addWidget(QLabel("Haz clic en las esquinas del área; doble clic para cerrar"))
         layout.addWidget(self.view, 1)
-        layout.addWidget(self.bar)
-        layout.addLayout(playback)
-        layout.addLayout(controls)
+        layout.addWidget(hint)
+        layout.addWidget(card(timeline_box))
         layout.addWidget(self.table)
+        layout.setContentsMargins(0, 0, 0, 0)
+        left = QWidget()
+        left.setLayout(layout)
+
+        count_box = QVBoxLayout()
+        count_box.addWidget(label("SUBIDAS", "caption"), 0, Qt.AlignmentFlag.AlignHCenter)
+        count_box.addWidget(self.count_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        count_box.addWidget(self.file_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        run = QHBoxLayout()
+        run.addWidget(self.pause_button)
+        run.addWidget(self.stop_button)
         marks = QHBoxLayout()
         marks.addWidget(self.all_button)
         marks.addWidget(self.none_button)
         panel = QVBoxLayout()
-        panel.addWidget(QLabel("Videos"))
+        panel.addWidget(card(count_box))
+        panel.addWidget(self.start_button)
+        panel.addLayout(run)
+        panel.addWidget(self.clear_button)
+        panel.addSpacing(6)
+        panel.addWidget(label("Videos", "section"))
         panel.addWidget(self.video_list, 1)
         panel.addLayout(marks)
         panel.setContentsMargins(0, 0, 0, 0)
         side = QWidget()
         side.setLayout(panel)
         side.setFixedWidth(PANEL_WIDTH)
-        layout.setContentsMargins(0, 0, 0, 0)
-        left = QWidget()
-        left.setLayout(layout)
+
         central = QWidget()
-        main = QHBoxLayout(central)
-        main.addWidget(left, 1)
-        main.addWidget(side)
+        main = QGridLayout(central)
+        main.setSpacing(12)
+        main.setContentsMargins(16, 14, 16, 12)
+        main.addLayout(top, 0, 0, 1, 2)
+        main.addWidget(left, 1, 0)
+        main.addWidget(side, 1, 1)
+        main.setColumnStretch(0, 1)
         self.setCentralWidget(central)
 
         self.folder_button.clicked.connect(self.open_folder)
@@ -245,8 +331,17 @@ class MainWindow(QMainWindow):
         self._busy(False)
         self.resize(1300, 800)
 
+    def _icon(self, button, icon):
+        # los iconos estándar de Fusion son oscuros: se pintan con el color de texto
+        pix = self.style().standardIcon(icon).pixmap(16, 16)
+        painter = QPainter(pix)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pix.rect(), QColor(TEXT))
+        painter.end()
+        button.setIcon(QIcon(pix))
+
     def _reset(self):
-        self.count_label.setText("Subidas: 0")
+        self.count_label.setText("0")
         self.file_label.clear()
         self.table.setRowCount(0)
         self.bar.clear_marks()
@@ -321,6 +416,7 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(item_path.name)
             item.setData(Qt.ItemDataRole.UserRole, item_path)
             item.setCheckState(Qt.CheckState.Checked)
+            item.setSizeHint(QSize(0, 28))
             self.video_list.addItem(item)
         self.video_list.setCurrentRow(videos.index(video))
         self.view.set_frame(to_qimage(frame))
@@ -421,12 +517,14 @@ class MainWindow(QMainWindow):
         self.playing = True
         self._last_tick = time.monotonic()
         self.play_button.setText("Pausa")
+        self._icon(self.play_button, SP.SP_MediaPause)
         self.tick.start()
 
     def _stop_play(self):
         self.playing = False
         self.tick.stop()
         self.play_button.setText("Reproducir")
+        self._icon(self.play_button, SP.SP_MediaPlay)
 
     def _tick(self):
         now = time.monotonic()
@@ -492,7 +590,7 @@ class MainWindow(QMainWindow):
         for item in self._items():
             item.setBackground(QBrush())
         for index in self.running:
-            self.run_items[index].setBackground(QColor(255, 220, 120))
+            self.run_items[index].setBackground(QColor(RUNNING))
         if self.running:
             self.video_list.scrollToItem(self.run_items[min(self.running)])
 
@@ -516,7 +614,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(provider)
 
     def show_counts(self, count):
-        self.count_label.setText(f"Subidas: {count}")
+        self.count_label.setText(str(count))
 
     def _finish(self):
         self.worker.wait()
@@ -535,6 +633,10 @@ class MainWindow(QMainWindow):
             total += count or 0
         self.table.setItem(len(rows), 0, QTableWidgetItem("TOTAL"))
         self.table.setItem(len(rows), 1, QTableWidgetItem(str(total)))
+        bold = QFont(self.table.font())
+        bold.setBold(True)
+        for column in range(2):
+            self.table.item(len(rows), column).setFont(bold)
         self._finish()
 
     def show_error(self, message):

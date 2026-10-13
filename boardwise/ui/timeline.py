@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QToolTip, QWidget
 
 from boardwise.core.clock import read_clock
 from boardwise.core.timeline import durations as cached_durations
+from boardwise.ui.style import ACCENT, BG, BORDER, MUTED, SUCCESS, TEXT
 
 PAD = 8
 NEAR_PX = 5  # distancia al clic para tomarlo como clic en una marca
@@ -55,7 +56,7 @@ class TimelineBar(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setFixedHeight(48)
+        self.setFixedHeight(52)
         self.setMouseTracking(True)
         self.timeline = None
         self.starts = []  # hora real de inicio de cada archivo (None = sin reloj)
@@ -112,29 +113,34 @@ class TimelineBar(QWidget):
                 return " · ".join(filter(None, [path.stem, start and clock_text(start)]))
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        palette = self.palette()
-        painter.fillRect(self.rect(), palette.window())
         if not self.timeline:
             return
-        timeline = self.timeline
-        painter.setPen(palette.text().color())
-        painter.drawText(PAD, 14, self.label())
-        painter.fillRect(QRectF(PAD, 28, self.width() - 2 * PAD, 6), palette.mid())
-        painter.fillRect(QRectF(PAD, 28, self.x_of(self.position) - PAD, 6), palette.highlight())
-        separator = QColor(palette.text().color())
-        separator.setAlpha(70)
-        painter.setPen(separator)
-        for offset in timeline.offsets[1:]:
-            x = self.x_of(offset)
-            painter.drawLine(int(x), 24, int(x), 38)
-        painter.setPen(QPen(QColor(220, 40, 40), 2))
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # reloj en texto normal; archivo y posición en tenue
+        head = clock_text(self.wall) + " · " if self.wall else ""
+        painter.setPen(QColor(TEXT))
+        painter.drawText(PAD, 16, head)
+        painter.setPen(QColor(MUTED))
+        painter.drawText(PAD + painter.fontMetrics().horizontalAdvance(head), 16, self.label()[len(head):])
+        track = QRectF(PAD, 30, self.width() - 2 * PAD, 6)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(BORDER))
+        painter.drawRoundedRect(track, 3, 3)
+        x = self.x_of(self.position)
+        painter.setBrush(QColor(ACCENT))
+        painter.drawRoundedRect(QRectF(PAD, 30, x - PAD, 6), 3, 3)
+        painter.setPen(QPen(QColor(MUTED), 1))
+        for offset in self.timeline.offsets[1:]:
+            separator = int(self.x_of(offset))
+            painter.drawLine(separator, 27, separator, 39)
+        painter.setPen(QPen(QColor(SUCCESS), 2))
         for t, *_ in self.sorted_marks():
-            x = int(self.x_of(t))
-            painter.drawLine(x, 22, x, 40)
-        painter.setPen(QPen(palette.text().color(), 1))
-        painter.setBrush(palette.base())
-        painter.drawEllipse(QRectF(self.x_of(self.position) - 5, 26, 10, 10))
+            mark = int(self.x_of(t))
+            painter.drawLine(mark, 22, mark, 44)
+        painter.setPen(QPen(QColor(BG), 2))
+        painter.setBrush(QColor("white"))
+        painter.drawEllipse(QRectF(x - 7, 26, 14, 14))
 
     def mousePressEvent(self, event):
         if not self.timeline or event.button() != Qt.MouseButton.LeftButton:

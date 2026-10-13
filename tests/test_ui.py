@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QPixmap
 
 import boardwise.ui.worker as worker_module
+from boardwise.ui import style
 from boardwise.core.pipeline import run
 from boardwise.ui.main_window import MainWindow, first_frame
 from boardwise.ui.worker import to_qimage
@@ -22,6 +23,7 @@ errors = []
 QMessageBox.critical = staticmethod(lambda parent, title, message: errors.append(message))
 
 app = QApplication([])
+style.apply(app)
 win = MainWindow()
 ROOT = Path(__file__).resolve().parents[1]
 win.set_source(ROOT / "data" / "sample_folder")
@@ -96,7 +98,7 @@ assert table.rowCount() == 4, table.rowCount()
 assert table.item(3, 0).text() == "TOTAL"
 total = int(table.item(3, 1).text())
 assert total > 0, total
-assert win.count_label.text() == f"Subidas: {total}"
+assert win.count_label.text() == str(total)
 print("total subidas (área por defecto):", total)
 
 # Una marca por subida; clic en la primera: pausa y salta 2 s antes
