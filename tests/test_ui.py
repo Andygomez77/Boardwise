@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -35,6 +35,40 @@ def wait_for(signal, ms=120_000):
     timer.stop()
 
 
+def wait_until(condition, ms=60_000):
+    for _ in range(ms // 50):
+        if condition():
+            return
+        QTest.qWait(50)
+    raise AssertionError("tiempo agotado")
+
+
+# Línea de tiempo: las duraciones se calculan en segundo plano y la barra se habilita al terminar
+assert not win.bar.isEnabled()
+wait_until(lambda: win.timeline is not None)
+timeline = win.timeline
+assert win.bar.isEnabled() and win.play_button.isEnabled()
+assert abs(timeline.total - sum(timeline.durations)) < 1e-9 and timeline.total > 0
+win._scrub(timeline.offsets[1] + timeline.durations[1] / 2)  # a la mitad del 2.º archivo
+assert win.bar.timeline.locate(win.position)[0].name == "segment_01.mp4"
+assert win.view.pix is not None and win.cap_path.name == "segment_01.mp4"
+win.fwd_10.click()
+assert abs(win.position - (timeline.offsets[1] + timeline.durations[1] / 2 + 10)) < 0.3 or win.position == timeline.total
+win.video_list.itemClicked.emit(win.video_list.item(2))  # clic en un video: salta a su inicio
+assert abs(win.position - timeline.offsets[2]) < 0.2 and win.cap_path.name == "segment_02.mp4"
+win.speed_box.setCurrentIndex(4)  # 16x: reproduce cruzando de archivo
+assert win.speed == 16
+win._scrub(timeline.offsets[1] - 1)
+assert win.cap_path.name == "segment_00.mp4"
+win.play_button.click()
+assert win.playing and win.play_button.text() == "Pausa"
+wait_until(lambda: win.cap_path.name == "segment_01.mp4" and win.position > timeline.offsets[1])
+win.play_button.click()
+assert not win.playing and win.play_button.text() == "Reproducir"
+win.speed_box.setCurrentIndex(0)
+win.video_list.itemClicked.emit(win.video_list.item(0))
+
+
 def run_to_end():
     win.start()
     wait_for(win.worker.done)
@@ -49,6 +83,22 @@ total = int(table.item(3, 1).text())
 assert total > 0, total
 assert win.count_label.text() == f"Subidas: {total}"
 print("total subidas (área por defecto):", total)
+
+# Una marca por subida; clic en la primera: pausa y salta 2 s antes
+assert len(win.bar.marks) == total, (len(win.bar.marks), total)
+assert win.bar.isEnabled() and win.play_button.isEnabled()
+win.show()
+app.processEvents()
+win.play_button.click()
+first = win.bar.sorted_marks()[0]
+QTest.mouseClick(win.bar, Qt.MouseButton.LeftButton, pos=QPoint(round(win.bar.x_of(first[0])) + 2, 30))
+assert not win.playing
+assert abs(win.position - max(first[0] - 2, 0)) < 0.2, (win.position, first)
+last = win.bar.sorted_marks()[-1]
+assert last[0] > 2
+QTest.mouseClick(win.bar, Qt.MouseButton.LeftButton, pos=QPoint(round(win.bar.x_of(last[0])) - 2, 30))
+assert abs(win.position - (last[0] - 2)) < 0.2, (win.position, last)
+print("primera subida:", round(first[0], 1), "s en", first[2].name)
 
 # Cada fila (modo paralelo) == el video procesado solo con un Counter nuevo
 for row in range(3):
@@ -73,6 +123,7 @@ win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
 
 # Pausar a mitad: no llegan cuadros ni conteos en pausa; al reanudar termina con el mismo total
 win.start()
+assert not win.bar.isEnabled() and not win.play_button.isEnabled() and win.bar.marks == []
 seen = []
 win.worker.frame.connect(lambda _: seen.append("frame"))
 win.worker.counts.connect(lambda _: seen.append("count"))

@@ -86,7 +86,7 @@ items.close()
 assert threading.active_count() == threads, threading.enumerate()
 started, done = [], []
 last = {}
-for path, _, _, count, _ in run_parallel(videos, AREA, workers=2, on_start=lambda p, c, d: started.append(p), on_done=done.append):
+for path, _, _, count, *_ in run_parallel(videos, AREA, workers=2, on_start=lambda p, c, d: started.append(p), on_done=done.append):
     last[path] = count
 alone = {path: list(run_videos([path], AREA))[-1][3] for path in videos}
 assert last == alone and sorted(started) == sorted(done) == videos, (last, alone)

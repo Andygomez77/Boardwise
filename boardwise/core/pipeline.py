@@ -41,6 +41,7 @@ class Counter:
         self.frames_inside = {}
         self.counted = set()
         self.inside_ids = set()  # IDs dentro del área en el último cuadro
+        self.new_ids = set()  # IDs que se contaron justo en el último update
 
     @property
     def count(self):
@@ -50,10 +51,12 @@ class Counter:
         detections = self.tracker.update_with_detections(detections)
         inside = self.zone.trigger(detections)
         self.inside_ids = set(detections.tracker_id[inside])
+        self.new_ids = set()
         for track_id in detections.tracker_id[inside]:
             self.frames_inside[track_id] = self.frames_inside.get(track_id, 0) + 1
-            if self.frames_inside[track_id] >= MIN_FRAMES_INSIDE:
+            if self.frames_inside[track_id] >= MIN_FRAMES_INSIDE and track_id not in self.counted:
                 self.counted.add(track_id)
+                self.new_ids.add(track_id)
         # ponytail: si el tracker pierde a alguien y le da otro ID, puede contarse doble; subir MIN_FRAMES_INSIDE o ReID si estorba.
         return detections
 
@@ -72,7 +75,7 @@ class _Serial:
 
 
 def _read(capture, stride, frames, stop):
-    """Hilo productor: lee un cuadro, salta stride-1 con grab() y lo pone en la cola (None = fin)."""
+    """Hilo productor: lee un cuadro, salta stride-1 con grab() y lo pone en la cola con su segundo en el archivo (None = fin)."""
 
     def put(item):
         while not stop.is_set():
@@ -88,10 +91,11 @@ def _read(capture, stride, frames, stop):
             ok, frame = capture.read()
             if not ok:
                 break
+            seconds = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000
             advanced = 1
             while advanced < stride and capture.grab():
                 advanced += 1
-            put((frame, advanced))
+            put((frame, advanced, seconds))
     except Exception as error:
         end = error
     put(end)
@@ -124,9 +128,9 @@ def _frames(paths, counter, detector, skip_bad=False, on_skip=None, stride=None)
                     break
                 if isinstance(item, Exception):
                     raise item
-                frame, advanced = item
+                frame, advanced, seconds = item
                 detections = counter.update(detector.detect(frame))
-                yield video_path, frame, detections, counter.count, advanced
+                yield video_path, frame, detections, counter.count, advanced, seconds, counter.new_ids
         finally:
             stop.set()
             reader.join()
@@ -136,8 +140,8 @@ def _frames(paths, counter, detector, skip_bad=False, on_skip=None, stride=None)
 def run(video_path, polygon, model_path=None, detector=None, stride=None):
     counter = Counter(polygon)
     detector = detector or Detector(model_path or _model_path())
-    for _, frame, detections, count, advanced in _frames([video_path], counter, detector, stride=stride):
-        yield frame, detections, count, advanced
+    for _, *item in _frames([video_path], counter, detector, stride=stride):
+        yield tuple(item)  # frame, detections, count, advanced, segundo, ids nuevos
 
 
 def run_videos(paths, polygon, model_path=None, detector=None, on_skip=None, counter=None, stride=None):
@@ -156,7 +160,7 @@ def run_folder(folder, polygon, model_path=None, detector=None, on_skip=None, st
 def run_parallel(paths, polygon, workers=PARALLEL_VIDEOS, model_path=None, on_skip=None, on_start=None, on_done=None, stride=None):
     """Varios videos a la vez: un hilo por video en curso, cada uno con su Counter y su Detector (sesión propia).
 
-    Hace yield de (video_path, frame, detections, count_de_ese_video, advanced).
+    Hace yield de (video_path, frame, detections, count_de_ese_video, advanced, segundo_en_el_archivo, ids_contados_ahora).
     on_start(path, counter, detector) y on_done(path) se llaman desde los hilos; un video que no abre solo llama a on_skip.
     """
     # ponytail: cada video tiene su propio tracker; quien sube justo en el corte entre dos archivos puede contarse doble o perderse (run_videos comparte el Counter).
@@ -268,9 +272,9 @@ def main():
     try:
         for item in generator:
             if folder:
-                path, frame, detections, count, advanced = item
+                path, frame, detections, count, advanced = item[:5]
             else:
-                frame, detections, count, advanced = item
+                frame, detections, count, advanced = item[:4]
                 path = source
             if path not in counts:
                 print(f"{path.name}: stride {advanced}")  # lo avanzado en el primer cuadro = stride usado

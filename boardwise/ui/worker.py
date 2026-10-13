@@ -19,6 +19,7 @@ def to_qimage(frame):
 class Worker(QThread):
     frame = Signal(QImage)
     counts = Signal(int)
+    mark = Signal(object, float)  # (video, segundo en el video) de cada subida contada
     file_started = Signal(int)  # posición en la lista
     file_finished = Signal(int)
     file_skipped = Signal(str)
@@ -93,8 +94,10 @@ class Worker(QThread):
             frames = 0
             started = last = time.perf_counter()
             try:
-                for path, frame, detections, count, advanced in items:
+                for path, frame, detections, count, advanced, seconds, new_ids in items:
                     final[path] = count
+                    for _ in new_ids:
+                        self.mark.emit(path, seconds)
                     frames += advanced  # fps = cuadros de VIDEO por segundo (todos los hilos, incluye los saltados)
                     now = time.perf_counter()
                     if now - last >= FRAME_INTERVAL:

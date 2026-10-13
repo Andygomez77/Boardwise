@@ -1,19 +1,29 @@
+import time
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import QPointF, QRect, Qt, Signal
+from PySide6.QtCore import QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from boardwise import updater
 from boardwise.core.pipeline import VIDEO_EXTENSIONS, list_videos
+from boardwise.core.timeline import Timeline, seek
+from boardwise.ui.timeline import DurationWorker, TimelineBar
 from boardwise.ui.worker import Worker, to_qimage
 
 TITLE = "Boardwise"
 BIG = "font-size: 28px; font-weight: bold"
 PANEL_WIDTH = 260
 CLOSE_PX = 10  # distancia en pantalla al primer vértice para cerrar el área
+SPEEDS = (1, 2, 4, 8, 16)
+TICK_MS = 33
+SCRUB_INTERVAL = 0.15  # segundos entre cuadros mientras se arrastra la barra
+LEAD = 2  # segundos antes de la subida a los que salta al hacer clic en su marca
+SEQUENTIAL_MAX = 1.0  # avances de hasta 1 s se leen cuadro a cuadro; más grandes saltan por tiempo
+CALCULATING = "Calculando duración…"
+SEEKING = "Buscando…"
 
 
 def first_frame(path):
@@ -126,11 +136,33 @@ class MainWindow(QMainWindow):
         self.provider = ""
         self.running = set()  # posiciones (en run_items) de los videos en curso
         self.finished = 0
+        self.timeline = None  # None mientras se calculan las duraciones
+        self.dur_worker = None
+        self.position = 0.0  # segundos desde el inicio de la carpeta
+        self.playing = False
+        self.speed = 1
+        self.scrubbing = False
+        self.cap = None  # VideoCapture propio de la reproducción
+        self.cap_path = None
+        self.cap_t = -1e9  # segundo (en el archivo) del último cuadro leído; -1e9 = hay que saltar
+        self.cap_fps = 15
+        self._last_tick = self._shown = 0.0
+        self.tick = QTimer(self)
+        self.tick.setInterval(TICK_MS)
+        self.tick.timeout.connect(self._tick)
 
         self.folder_button = QPushButton("Abrir carpeta…")
         self.video_button = QPushButton("Abrir video…")
         self.path_label = QLabel("Elige una carpeta o un video")
         self.view = VideoView()
+        self.bar = TimelineBar()
+        self.back_min = QPushButton("−1 min")
+        self.back_10 = QPushButton("−10 s")
+        self.play_button = QPushButton("Reproducir")
+        self.fwd_10 = QPushButton("+10 s")
+        self.fwd_min = QPushButton("+1 min")
+        self.speed_box = QComboBox()
+        self.speed_box.addItems([f"{speed}x" for speed in SPEEDS])
         self.start_button = QPushButton("Iniciar")
         self.pause_button = QPushButton("Pausar")
         self.stop_button = QPushButton("Detener")
@@ -154,10 +186,16 @@ class MainWindow(QMainWindow):
         for widget in (self.start_button, self.pause_button, self.stop_button, self.count_label, self.file_label):
             controls.addWidget(widget)
         controls.setStretch(4, 1)
+        playback = QHBoxLayout()
+        for widget in (self.back_min, self.back_10, self.play_button, self.fwd_10, self.fwd_min, self.speed_box):
+            playback.addWidget(widget)
+        playback.addStretch(1)
         layout = QVBoxLayout()
         layout.addLayout(top)
         layout.addWidget(QLabel("Haz clic en las esquinas del área; doble clic para cerrar"))
         layout.addWidget(self.view, 1)
+        layout.addWidget(self.bar)
+        layout.addLayout(playback)
         layout.addLayout(controls)
         layout.addWidget(self.table)
         marks = QHBoxLayout()
@@ -186,6 +224,12 @@ class MainWindow(QMainWindow):
         self.pause_button.clicked.connect(self.toggle_pause)
         self.stop_button.clicked.connect(self.stop)
         self.video_list.itemClicked.connect(self.show_first_frame)
+        self.bar.seek.connect(self._on_seek)
+        self.bar.mark_clicked.connect(self._goto_mark)
+        self.play_button.clicked.connect(self.toggle_play)
+        for button, seconds in ((self.back_min, -60), (self.back_10, -10), (self.fwd_10, 10), (self.fwd_min, 60)):
+            button.clicked.connect(lambda _=False, seconds=seconds: self._scrub(self.position + seconds))
+        self.speed_box.currentIndexChanged.connect(lambda i: setattr(self, "speed", SPEEDS[i]))
         self.video_list.itemChanged.connect(self._update_start)
         self.all_button.clicked.connect(lambda: self._mark_all(Qt.CheckState.Checked))
         self.none_button.clicked.connect(lambda: self._mark_all(Qt.CheckState.Unchecked))
@@ -199,12 +243,15 @@ class MainWindow(QMainWindow):
         self.count_label.setText("Subidas: 0")
         self.file_label.clear()
         self.table.setRowCount(0)
+        self.bar.clear_marks()
 
     def _busy(self, busy):
         for widget in (self.folder_button, self.video_button, self.view, self.clear_button):
             widget.setEnabled(not busy)
         self.stop_button.setEnabled(busy)
         self.pause_button.setEnabled(busy)
+        if busy:
+            self._stop_play()
         self.pause_button.setText("Pausar")
         self.paused = False
         for widget in (self.all_button, self.none_button):
@@ -214,6 +261,12 @@ class MainWindow(QMainWindow):
             item.setFlags(flags & ~Qt.ItemFlag.ItemIsUserCheckable if busy else flags)
             item.setBackground(QBrush())
         self._update_start()
+        self._update_playback()
+
+    def _update_playback(self):
+        enabled = self.timeline is not None and not self.stop_button.isEnabled()
+        for widget in (self.bar, self.back_min, self.back_10, self.play_button, self.fwd_10, self.fwd_min, self.speed_box):
+            widget.setEnabled(enabled)
 
     def _items(self):
         return [self.video_list.item(row) for row in range(self.video_list.count())]
@@ -252,6 +305,10 @@ class MainWindow(QMainWindow):
             return
         self.path_label.setText(f"{path}  ({len(videos)} videos)" if path.is_dir() else str(path))
         self._reset()
+        self._stop_play()
+        self.timeline, self.position, self.cap_path, self.cap_t = None, 0.0, None, -1e9
+        self.bar.set_timeline(None)
+        self.bar.set_position(0.0)
         self.video_list.clear()
         for item_path in videos:
             item = QListWidgetItem(item_path.name)
@@ -261,10 +318,119 @@ class MainWindow(QMainWindow):
         self.video_list.setCurrentRow(videos.index(video))
         self.view.set_frame(to_qimage(frame))
         self.view.set_default_area()
+        self.dur_worker = worker = DurationWorker(videos, self)
+        worker.done.connect(lambda durations: self._durations_ready(worker, durations))
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+        self.statusBar().showMessage(CALCULATING)
+        self._update_playback()
+
+    def _durations_ready(self, worker, durations):
+        if worker is not self.dur_worker:  # llegó tarde: ya se abrió otra ruta
+            return
+        timeline = Timeline(worker.paths, durations)
+        if self.statusBar().currentMessage() == CALCULATING:
+            self.statusBar().clearMessage()
+        if timeline.total <= 0:
+            self.statusBar().showMessage("No se pudo calcular la duración")
+            return
+        self.timeline = timeline
+        self.bar.set_timeline(timeline)
+        self._update_playback()
+
+    def _show(self, seconds, mode):
+        """Pone en la vista el cuadro limpio del instante global `seconds`; devuelve el instante global real, None si no cambió.
+
+        mode: "precise" (seek: cae en el primer cuadro >= t, tarda), "drag" (salto directo, aproximado) o "play" (secuencial).
+        """
+        # ponytail: decodifica en el hilo de la UI; a 16x (~240 cuadros/s) puede ir a tirones. Mover a un hilo si se traba.
+        path, local = self.timeline.locate(seconds)
+        if path != self.cap_path:
+            if self.cap:
+                self.cap.release()
+            self.cap, self.cap_path, self.cap_t = cv2.VideoCapture(str(path)), path, -1e9
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            self.cap_fps = fps if fps > 0 else 15
+        delta = local - self.cap_t
+        if mode == "play" and -SEQUENTIAL_MAX < delta < 0:
+            return None  # el cuadro mostrado ya es posterior (el cuadro leído cae un poco después)
+        if mode == "play" and 0 <= delta <= SEQUENTIAL_MAX:
+            skip = int(delta * self.cap_fps)
+            if skip < 1:
+                return None  # todavía no toca el siguiente cuadro
+            for _ in range(skip - 1):
+                self.cap.grab()
+            ok, frame = self.cap.read()
+            real = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        elif mode == "drag":
+            self.cap.set(cv2.CAP_PROP_POS_MSEC, local * 1000)
+            ok, frame = self.cap.read()
+            real = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        else:
+            real = seek(self.cap, local)
+            ok, frame = (False, None) if real is None else self.cap.retrieve()
+        if not ok:
+            self.cap_t = -1e9
+            return None
+        self.cap_t = real
+        self.view.set_frame(to_qimage(frame))
+        return self.timeline.to_global(path, real)
+
+    def _scrub(self, seconds, mode="precise"):
+        if not self.timeline:
+            return
+        self.position = min(max(seconds, 0.0), self.timeline.total)
+        if mode == "drag" and time.monotonic() - self._shown < SCRUB_INTERVAL:
+            return self.bar.set_position(self.position)
+        self._shown = time.monotonic()
+        if mode == "precise":
+            self.statusBar().showMessage(SEEKING)
+            self.statusBar().repaint()  # sin procesar eventos, para que no parezca colgado
+        real = self._show(self.position, mode)
+        if mode == "precise" and self.statusBar().currentMessage() == SEEKING:
+            self.statusBar().clearMessage()
+        # la posición mostrada es la real: tras un hueco, el siguiente cuadro existente
+        if real is not None and (mode == "precise" or (mode == "play" and abs(real - self.position) > 1)):
+            self.position = real
+        self.bar.set_position(self.position)
+
+    def _on_seek(self, seconds, final):
+        self.scrubbing = not final
+        self._scrub(seconds, "precise" if final else "drag")
+
+    def _goto_mark(self, seconds):
+        self._stop_play()
+        self._scrub(seconds - LEAD)
+
+    def toggle_play(self):
+        if self.playing:
+            return self._stop_play()
+        if self.position >= self.timeline.total:
+            self._scrub(0.0)
+        self.playing = True
+        self._last_tick = time.monotonic()
+        self.play_button.setText("Pausa")
+        self.tick.start()
+
+    def _stop_play(self):
+        self.playing = False
+        self.tick.stop()
+        self.play_button.setText("Reproducir")
+
+    def _tick(self):
+        now = time.monotonic()
+        dt, self._last_tick = now - self._last_tick, now
+        if self.scrubbing:
+            return
+        self._scrub(self.position + dt * self.speed, "play")
+        if self.position >= self.timeline.total:
+            self._stop_play()
 
     def show_first_frame(self, item):
         if not self.folder_button.isEnabled():  # procesando
             return
+        if self.timeline:
+            return self._scrub(self.timeline.offsets[self.video_list.row(item)])  # la barra salta al inicio de ese video
         path = item.data(Qt.ItemDataRole.UserRole)
         frame = first_frame(path)
         if frame is None:
@@ -283,8 +449,10 @@ class MainWindow(QMainWindow):
         self.running, self.finished = set(), 0
         self.show_progress()
         self._busy(True)
+        self.cap_t = -1e9  # la vista va a mostrar otra cosa: la próxima lectura salta
         self.worker = worker = Worker(paths, self.view.polygon)
         worker.frame.connect(self.view.set_frame)
+        worker.mark.connect(self.bar.add_mark)
         worker.counts.connect(self.show_counts)
         worker.file_started.connect(self.file_started)
         worker.file_finished.connect(self.file_finished)
@@ -362,6 +530,12 @@ class MainWindow(QMainWindow):
         self._finish()
 
     def closeEvent(self, event):
+        self._stop_play()
+        if self.cap:
+            self.cap.release()
+        for thread in self.findChildren(DurationWorker):
+            thread.requestInterruption()
+            thread.wait()
         if self.worker:
             self.worker.stop()
             self.worker.wait()
