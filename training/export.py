@@ -1,12 +1,27 @@
-"""Descarga yolo11n.pt (preentrenado COCO) y lo exporta a models/yolo11n.onnx imgsz=640."""
+"""Exporta modelos YOLO11 a ONNX con NMS embebido (imgsz=640).
+Por defecto exporta yolo11n. Puede recibir modelo como arg: yolo11n|yolo11s|yolo11m."""
 from pathlib import Path
 import shutil
+import sys
 
 from ultralytics import YOLO
 
-REPO = Path(__file__).resolve().parent.parent          # raíz del repo, funcione desde donde se ejecute
-WEIGHTS = REPO / "training" / "yolo11n.pt"            # queda en training/ (gitignored: *.pt)
-OUT = REPO / "models" / "yolo11n.onnx"
+REPO = Path(__file__).resolve().parent.parent          # raíz del repo
+TRAINING = REPO / "training"
+OUT_DIR = TRAINING / "out"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Modelo por defecto
+model_name = "yolo11n"
+if len(sys.argv) > 1 and sys.argv[1]:
+    arg = sys.argv[1].strip()
+    if arg in ("yolo11n", "yolo11s", "yolo11m"):
+        model_name = arg
+    else:
+        print(f"[export] argumento desconocido {arg}; usando {model_name}")
+
+WEIGHTS = TRAINING / f"{model_name}.pt"            # queda en training/ (gitignored: *.pt)
+OUT = OUT_DIR / f"{model_name}.onnx"
 
 model = YOLO(WEIGHTS)  # descarga los pesos si no existen
 
@@ -32,3 +47,4 @@ for i in sess.get_inputs():
 for o in sess.get_outputs():
     print(f"[export] output: name={o.name} shape={o.shape} type={o.type}")
 print(f"[export] nms embebido: {nms_ok}")
+print(f"[export] modelo: {model_name}")
