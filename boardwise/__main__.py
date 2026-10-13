@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox, QProgressDialog
 
 from boardwise import updater
+from boardwise.ui import style
 from boardwise.ui.main_window import TITLE, MainWindow
 
 
@@ -54,6 +55,7 @@ def update_if_available(app) -> bool:
 
 def main():
     app = QApplication(sys.argv)
+    style.apply(app)
     if update_if_available(app):
         return
     win = MainWindow()

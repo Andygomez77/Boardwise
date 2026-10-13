@@ -4,14 +4,17 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import threading
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from PySide6.QtGui import QPixmap
 
+import boardwise.ui.worker as worker_module
+from boardwise.ui import style
 from boardwise.core.pipeline import run
 from boardwise.ui.main_window import MainWindow, first_frame
 from boardwise.ui.worker import to_qimage
@@ -20,8 +23,10 @@ errors = []
 QMessageBox.critical = staticmethod(lambda parent, title, message: errors.append(message))
 
 app = QApplication([])
+style.apply(app)
 win = MainWindow()
-win.set_source(Path(__file__).resolve().parents[1] / "data" / "sample_folder")
+ROOT = Path(__file__).resolve().parents[1]
+win.set_source(ROOT / "data" / "sample_folder")
 
 
 def wait_for(signal, ms=120_000):
@@ -33,6 +38,52 @@ def wait_for(signal, ms=120_000):
     timer.start(ms)
     loop.exec()
     timer.stop()
+
+
+def wait_until(condition, ms=60_000):
+    for _ in range(ms // 50):
+        if condition():
+            return
+        QTest.qWait(50)
+    raise AssertionError("tiempo agotado")
+
+
+# Línea de tiempo: las duraciones se calculan en segundo plano y la barra se habilita al terminar
+assert not win.bar.isEnabled()
+wait_until(lambda: win.timeline is not None)
+timeline = win.timeline
+assert win.bar.isEnabled() and win.play_button.isEnabled()
+assert abs(timeline.total - sum(timeline.durations)) < 1e-9 and timeline.total > 0
+win._scrub(timeline.offsets[1] + timeline.durations[1] / 2)  # a la mitad del 2.º archivo
+assert win.bar.timeline.locate(win.position)[0].name == "segment_01.mp4"
+assert win.view.pix is not None and win.cap_path.name == "segment_01.mp4"
+win.fwd_10.click()
+assert abs(win.position - (timeline.offsets[1] + timeline.durations[1] / 2 + 10)) < 0.3 or win.position == timeline.total
+win.video_list.itemClicked.emit(win.video_list.item(2))  # clic en un video: salta a su inicio
+assert abs(win.position - timeline.offsets[2]) < 0.2 and win.cap_path.name == "segment_02.mp4"
+win.speed_box.setCurrentIndex(4)  # 16x: reproduce cruzando de archivo
+assert win.speed == 16
+win._scrub(timeline.offsets[1] - 1)
+assert win.cap_path.name == "segment_00.mp4"
+win.play_button.click()
+assert win.playing and win.play_button.text() == "Pausa"
+wait_until(lambda: win.cap_path.name == "segment_01.mp4" and win.position > timeline.offsets[1])
+win.play_button.click()
+assert not win.playing and win.play_button.text() == "Reproducir"
+win.speed_box.setCurrentIndex(0)
+win.video_list.itemClicked.emit(win.video_list.item(0))
+
+# Sin reloj (sample_folder): solo la posición relativa, sin hora real ni inicios
+assert win.wall is None and win.bar.wall is None and win.bar.starts == [None] * 3
+win._scrub(timeline.offsets[1] + 3)
+assert win.bar.label().startswith("segment_01 · 00:00:") and "M" not in win.bar.label(), win.bar.label()
+win.video_list.itemClicked.emit(win.video_list.item(0))
+
+# Con reloj falso en el worker: la marca guarda la hora y el tooltip la muestra
+FAKE = datetime(2026, 10, 6, 13, 59, 29)
+real_read_clock = worker_module.read_clock
+worker_module.read_clock = lambda frame: FAKE
+win.starts = {"segment_00.mp4": FAKE}
 
 
 def run_to_end():
@@ -47,8 +98,33 @@ assert table.rowCount() == 4, table.rowCount()
 assert table.item(3, 0).text() == "TOTAL"
 total = int(table.item(3, 1).text())
 assert total > 0, total
-assert win.count_label.text() == f"Subidas: {total}"
+assert win.count_label.text() == str(total)
 print("total subidas (área por defecto):", total)
+
+# Una marca por subida; clic en la primera: pausa y salta 2 s antes
+assert len(win.bar.marks) == total, (len(win.bar.marks), total)
+assert win.bar.isEnabled() and win.play_button.isEnabled()
+win.show()
+app.processEvents()
+win.play_button.click()
+first = win.bar.sorted_marks()[0]
+QTest.mouseClick(win.bar, Qt.MouseButton.LeftButton, pos=QPoint(round(win.bar.x_of(first[0])) + 2, 30))
+assert not win.playing
+assert abs(win.position - max(first[0] - 2, 0)) < 0.2, (win.position, first)
+last = win.bar.sorted_marks()[-1]
+assert last[0] > 2
+QTest.mouseClick(win.bar, Qt.MouseButton.LeftButton, pos=QPoint(round(win.bar.x_of(last[0])) - 2, 30))
+assert abs(win.position - (last[0] - 2)) < 0.2, (win.position, last)
+print("primera subida:", round(first[0], 1), "s en", first[2].name)
+worker_module.read_clock = real_read_clock
+assert all(mark[2] == FAKE for mark in win.bar.marks)
+assert win.bar.tooltip_at(win.bar.x_of(first[0])) == f"Subida 1 · 01:59:29 PM · {first[2].stem}", win.bar.tooltip_at(win.bar.x_of(first[0]))
+assert table.horizontalHeaderItem(2).text() == "Inicio"
+assert table.item(0, 2).text() == "06/10/2026 01:59:29 PM" and table.item(1, 2).text() == ""
+win.bar.starts[1] = FAKE  # tooltip del separador (si no hay una marca encima)
+x = win.bar.x_of(timeline.offsets[1])
+assert win.bar._mark_near(x) or win.bar.tooltip_at(x) == "segment_01 · 06/10/2026 01:59:29 PM", win.bar.tooltip_at(x)
+win.bar.starts[1] = None
 
 # Cada fila (modo paralelo) == el video procesado solo con un Counter nuevo
 for row in range(3):
@@ -63,6 +139,7 @@ win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
 names = [win.video_list.item(0).text(), win.video_list.item(2).text()]
 run_to_end()
 assert [table.item(r, 0).text() for r in range(table.rowCount())] == names + ["TOTAL"], table.rowCount()
+assert all(mark[2] is None for mark in win.bar.marks)  # sin reloj en los cuadros: marcas sin hora
 reference = table.item(2, 1).text()
 print("total con 2 videos:", reference)
 win.none_button.click()
@@ -73,6 +150,7 @@ win.video_list.item(1).setCheckState(Qt.CheckState.Unchecked)
 
 # Pausar a mitad: no llegan cuadros ni conteos en pausa; al reanudar termina con el mismo total
 win.start()
+assert not win.bar.isEnabled() and not win.play_button.isEnabled() and win.bar.marks == []
 seen = []
 win.worker.frame.connect(lambda _: seen.append("frame"))
 win.worker.counts.connect(lambda _: seen.append("count"))
@@ -150,6 +228,22 @@ for point in points[:3]:
 click((points[0][0] + 5, points[0][1] + 5))
 assert view.closed and len(view.polygon) == 3, view.polygon
 assert all(close_to(a, b) for a, b in zip(view.polygon, points[:3])), view.polygon  # solo los puntos nuevos
+
+# Archivo real del DVR (si existe): saltar a 1309.8 s de hiv00054 muestra 01:59:29 PM; la tabla y los separadores usan el inicio real
+real = ROOT / "data" / "video test" / "983 06-10-2026" / "hiv00054.mp4"
+if real.exists():
+    dvr = MainWindow()
+    dvr.show()
+    dvr.set_source(real)
+    wait_until(lambda: dvr.timeline is not None)
+    assert dvr.starts == {"hiv00054.mp4": datetime(2026, 10, 6, 13, 37, 40)}, dvr.starts
+    dvr._scrub(1309.8)
+    assert dvr.wall == datetime(2026, 10, 6, 13, 59, 29), dvr.wall
+    assert dvr.bar.label().startswith("06/10/2026 01:59:29 PM · hiv00054 · 00:21:"), dvr.bar.label()
+    dvr.bar.add_mark(real, 1309.8, dvr.wall)
+    assert dvr.bar.tooltip_at(dvr.bar.x_of(1309.8)) == "Subida 1 · 01:59:29 PM · hiv00054"
+    dvr.close()
+    print("reloj real: ok")
 
 # Cerrar la ventana en pausa no se cuelga ni deja hilos de lectura colgados
 threads = threading.active_count()
